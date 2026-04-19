@@ -14,7 +14,13 @@ var _mtn_a   : Sprite2D
 var _mtn_b   : Sprite2D
 var _vehicle: LastRoadVehicle
 var _hud     : CanvasLayer
+var _rain_layer : CanvasLayer
+var _rain    : Node2D
 var _obstacles: LastRoadObstacles
+var _camera   : Camera2D
+
+var _monster_distance: float = 60.0  # 초기 괴물 간격 (세계 단위, 600은 지평선 너머였음)
+const MONSTER_SPEED := 90.0           # 괴물 고정 속도 (km/h)
 
 # ── 배경 무한 스크롤 (코너에서만 누적) ────────────────────────
 var _sky_tile_w := 1.0
@@ -37,6 +43,7 @@ const _TreeScript    = preload("res://scripts/tree_renderer.gd")
 const _VehicleScript = preload("res://scripts/vehicle.gd")
 const _HudScript     = preload("res://scripts/hud.gd")
 const _ObstacleScript = preload("res://scripts/obstacle_system.gd")
+const _RainScript    = preload("res://scripts/rain_renderer.gd")
 
 var _mtn_base_y: float = 0.0
 var _sky_base_y: float = 0.0
@@ -45,13 +52,33 @@ var _sky_y: float = 0.0
 
 # ─────────────────────────────────────────────────────────────
 func _ready() -> void:
+	# 카메라 이동 시 화면 밖(회색) 영역이 보이지 않도록 거대한 검은색 배경을 먼저 깔아줍니다.
+	var bg := ColorRect.new()
+	bg.color = Color.BLACK
+	bg.position = Vector2(-2000, -2000)
+	bg.size = Vector2(6000, 6000)
+	add_child(bg)
+	
 	_build_sky_tiled()
 	_build_mountain_tiled()
 	_road    = _RoadScript.new();    add_child(_road)
 	_trees   = _TreeScript.new();    add_child(_trees)
 	_obstacles = _ObstacleScript.new(); add_child(_obstacles)
 	_vehicle = _VehicleScript.new(); add_child(_vehicle)
-	_hud     = _HudScript.new();     add_child(_hud)
+	# rain은 화면 고정이어야 하므로 CanvasLayer에 올려 카메라 줌/패럴랙스 영향 차단
+	_rain_layer = CanvasLayer.new()
+	_rain_layer.layer = 1               # hud와 같은 레이어지만 트리 상 먼저라 아래 렌더
+	add_child(_rain_layer)
+	_rain = _RainScript.new()
+	_rain_layer.add_child(_rain)
+	_hud  = _HudScript.new();       add_child(_hud)
+	_rain.start_rain()
+	
+	_camera = Camera2D.new()
+	_camera.position = Vector2(640.0, 360.0)
+	add_child(_camera)
+	
+	_hud.follow_viewport_enabled = true
 
 # ── 하늘 (2타일 무한 가로 스크롤) ────────────────────────────
 func _build_sky_tiled() -> void:
@@ -119,9 +146,32 @@ func _process(delta: float) -> void:
 	_vehicle.update_rpm(delta)
 	var curve_x := _vehicle.compute_strip_curve_offsets()
 	var hill_px := _vehicle.hill_offset_px()
+	
+	# 괴물 간격 업데이트 (km/h -> 세계 단위 변환율 SCROLL_RATE = 0.05)
+	var speed_diff := _vehicle.speed - MONSTER_SPEED
+	_monster_distance += speed_diff * 0.05 * delta
+	_monster_distance = maxf(_monster_distance, 0.0)
+	
 	_update_backdrops(delta)
 	_update_backdrops_vertical(delta, hill_px)
-	_hud.update(_vehicle.speed, _vehicle.scroll_z, _vehicle.steering_angle, _vehicle.rpm)
+	_hud.update(_vehicle.speed, _vehicle.scroll_z, _vehicle.steering_angle, _vehicle.rpm, _monster_distance, delta)
+	
+	# 카메라 줌 업데이트 (전체 화면 줌)
+	var ease_t := smoothstep(0.0, 1.0, _hud._focus_t)
+	var screen_center := Vector2(640.0, 360.0)
+	
+	# 룸미러의 중심 (665, 81). 
+	# 카메라가 이 좌표를 향하면 룸미러가 화면 정중앙에 옵니다.
+	# 룸미러가 화면 중앙보다 약간 위쪽에 오게 하려면, 카메라가 살짝 아래를 봐야 하므로 y값을 늘려줍니다.
+	var target_camera_pos := Vector2(665.0, 120.0) 
+	
+	_camera.zoom = Vector2(1.0, 1.0).lerp(Vector2(2.2, 2.2), ease_t)
+	_camera.position = screen_center.lerp(target_camera_pos, ease_t)
+	
+	_rain.set_wiper_transforms(
+		_hud._wiper_pivot_L.position, _hud._wiper_pivot_L.rotation,
+		_hud._wiper_pivot_R.position, _hud._wiper_pivot_R.rotation
+	)
 	_road.update_state(_vehicle.scroll_z, _vehicle.cam_x, curve_x, hill_px)
 	_trees.update_state(_vehicle.scroll_z, _vehicle.cam_x, curve_x, hill_px)
 	_obstacles.update_state(_vehicle.scroll_z, _vehicle.cam_x, curve_x, hill_px)

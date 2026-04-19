@@ -11,7 +11,7 @@ const HORIZON_Y_BASE := 300.0
 # ── 스폰 튜닝 ────────────────────────────────────────────────
 const SPACING_Z        := 22.0   # 큰 값일수록 덜 자주
 const SPAWN_CHANCE     := 0.14   # 0~1
-const VISIBLE_DZ_MIN   := 6.0
+const VISIBLE_DZ_MIN   := -1.0
 const VISIBLE_DZ_MAX   := 78.0
 
 # ── 충돌 튜닝 ────────────────────────────────────────────────
