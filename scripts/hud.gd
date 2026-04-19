@@ -47,12 +47,25 @@ var _spd_pivot    : Node2D
 var _rpm_pivot    : Node2D
 var _hud_spd      : Label
 
+# ── 충돌 임팩트 쉐이크 ────────────────────────────────────────
+const IMPACT_TIME := 0.22
+const IMPACT_MAG  := 9.0
+var _impact_t: float = 0.0
+
 func _ready() -> void:
 	_build_portrait()
 	_build_dashboard()
 	_build_needles()
 	_build_wheel()
 	_build_labels()
+	set_process(true)
+
+func _process(delta: float) -> void:
+	if _impact_t > 0.0:
+		_impact_t = maxf(_impact_t - delta, 0.0)
+
+func on_rock_hit() -> void:
+	_impact_t = IMPACT_TIME
 
 # ── 초상화 ───────────────────────────────────────────────────
 func _build_portrait() -> void:
@@ -182,6 +195,13 @@ func _update_shake(speed: float, scroll_z: float, steering_angle: float) -> void
 	var bounce := sin(scroll_z * 15.0) * (speed / SPEED_MAX) * 1.2
 	var sway   := -(steering_angle / 35.0) * 2.5
 	var offset := Vector2(sway, bounce)
+
+	# 충돌 임팩트: 짧고 크게, 빠르게 감쇠
+	if _impact_t > 0.0:
+		var t := _impact_t / IMPACT_TIME
+		var kick := t * t
+		var ph := float(Time.get_ticks_msec()) * 0.055
+		offset += Vector2(sin(ph * 1.7), cos(ph * 2.1)) * (IMPACT_MAG * kick)
 	if _dash != null:
 		_dash.position    = offset
 	if _wheel != null:

@@ -14,6 +14,13 @@ const LATERAL_SPEED := 2.5     # cam_x(차선) 단위/초
 const MAX_STEER_DEG := 35.0
 const STEER_SPEED   := 150.0
 
+# ── 코너 자동 조향(핸들 비주얼용) ─────────────────────────────
+# k(곡률) -> 조향각(도). 너무 세면 과장되어 보이므로 작게.
+const AUTO_STEER_GAIN_DEG := 220.0
+const AUTO_STEER_MAX_DEG  := 18.0
+# 플레이어 입력은 "기본 조향"에 더해지는 오프셋
+const PLAYER_STEER_MAX_DEG := 16.0
+
 # ── 스크롤 ───────────────────────────────────────────────────
 const SCROLL_RATE := 0.05
 
@@ -29,10 +36,8 @@ const COURSE: Array[Dictionary] = [
 ]
 var _course_length: float = -1.0
 
-# ── 언덕(가벼운 출렁임): 화면 픽셀 기준 지평선 오프셋 ───────────────
-const HILL_AMP_PX   := 14.0  # 최대 상하 이동(픽셀) — 1번(살짝) 기준
-const HILL_FREQ     := 0.11  # z에 대한 주파수 (클수록 자주 출렁)
-const HILL_AMP_VAR  := 0.35  # 런마다 약간 다른 느낌(고정 난수 대신 z로 변조)
+const HILL_AMP_PX  := 22.0   # 최대 상하 이동(픽셀) — 체감용(주기 없는 노이즈라 숨쉬는 느낌 적음)
+const HILL_SEG_LEN := 85.0   # 세계 z 기준 한 덩어리 길이(작을수록 변화가 빨라져 언덕 체감↑)
 
 # ── RPM / 기어 파라미터 ───────────────────────────────────────
 const IDLE_RPM    := 800.0
@@ -48,6 +53,12 @@ var scroll_z       : float = 0.0
 var steering_angle : float = 0.0
 var rpm            : float = 800.0
 var gear           : int   = 0
+var _player_steer_offset : float = 0.0
+
+# ── 방해물(돌) 패널티 ─────────────────────────────────────────
+const ROCK_HIT_SPEED   := 15.0  # “시속 10km대”
+const ACCEL_LOCK_TIME  := 0.2
+var _accel_lock: float = 0.0
 
 func _course_total_length() -> float:
 	if _course_length < 0.0:
@@ -105,17 +116,36 @@ func curvature_at_z_world(z: float) -> float:
 
 ## 현재 위치의 언덕 오프셋(픽셀). +면 지평선이 아래로 내려가(내리막 느낌), -면 위로 올라감.
 func hill_offset_px() -> float:
-	# 두 개 사인파를 합쳐서 반복감은 줄이고 "살짝 출렁"만 만든다
-	var a := sin(scroll_z * HILL_FREQ)
-	var b := sin(scroll_z * (HILL_FREQ * 0.63) + 1.7)
-	var amp := HILL_AMP_PX * (1.0 - HILL_AMP_VAR) + HILL_AMP_PX * HILL_AMP_VAR * (0.5 + 0.5 * b)
-	return a * amp
+	# 규칙적인 사인파는 “배경이 숨 쉬는” 느낌이 나기 쉬움 → 결정적(시드 없는) 1D 밸류 노이즈로 완만하게
+	var z := scroll_z / HILL_SEG_LEN
+	var i0 := int(floorf(z))
+	var t := z - float(i0)
+	# smoothstep
+	t = t * t * (3.0 - 2.0 * t)
+
+	var v0 := _hill_hash(i0)
+	var v1 := _hill_hash(i0 + 1)
+	return lerpf(v0, v1, t) * HILL_AMP_PX
+
+
+func _hill_hash(i: int) -> float:
+	# [-1, 1] 범위의 결정적 값 (LCG 기반)
+	# GDScript에는 uint32()가 없으므로 int + 마스킹으로 32-bit처럼 취급
+	var h := int((i * 1664525 + 1013904223) & 0x7fffffff)
+	var x := float(h & 0xFFFF) / 65535.0
+	return x * 2.0 - 1.0
 
 func handle_input(delta: float) -> void:
+	if _accel_lock > 0.0:
+		_accel_lock = maxf(_accel_lock - delta, 0.0)
+
 	var w := Input.is_key_pressed(KEY_W) or Input.is_action_pressed("ui_up")
 	var s := Input.is_key_pressed(KEY_S) or Input.is_action_pressed("ui_down")
 	var a := Input.is_key_pressed(KEY_A) or Input.is_action_pressed("ui_left")
 	var d := Input.is_key_pressed(KEY_D) or Input.is_action_pressed("ui_right")
+
+	if _accel_lock > 0.0:
+		w = false
 
 	if w:
 		speed = minf(speed + ACCEL * delta, MAX_SPEED)
@@ -129,11 +159,18 @@ func handle_input(delta: float) -> void:
 	elif d:
 		cam_x = minf(cam_x + LATERAL_SPEED * delta, 1.0)
 
-	var target_steer := 0.0
+	# 코너 구간이면 기본으로 핸들이 돌아가고, A/D는 거기에 "추가로" 더 꺾는 방식
+	var k := curvature_at_scroll()
+	var auto := clampf(k * AUTO_STEER_GAIN_DEG, -AUTO_STEER_MAX_DEG, AUTO_STEER_MAX_DEG)
+
+	var target_off := 0.0
 	if a:
-		target_steer = -MAX_STEER_DEG
+		target_off = -PLAYER_STEER_MAX_DEG
 	elif d:
-		target_steer = MAX_STEER_DEG
+		target_off = PLAYER_STEER_MAX_DEG
+	_player_steer_offset = move_toward(_player_steer_offset, target_off, STEER_SPEED * delta)
+
+	var target_steer := clampf(auto + _player_steer_offset, -MAX_STEER_DEG, MAX_STEER_DEG)
 	steering_angle = move_toward(steering_angle, target_steer, STEER_SPEED * delta)
 
 func update_scroll(delta: float) -> void:
@@ -150,3 +187,11 @@ func update_rpm(delta: float) -> void:
 		gear -= 1
 	var target_rpm := maxf(speed * GEAR_RATIO[gear], IDLE_RPM)
 	rpm = move_toward(rpm, target_rpm, 2500.0 * delta)
+
+
+func apply_rock_hit() -> void:
+	# 속도 급락 + 잠깐 가속 불가
+	speed = minf(speed, ROCK_HIT_SPEED)
+	if speed < ROCK_HIT_SPEED:
+		speed = ROCK_HIT_SPEED
+	_accel_lock = ACCEL_LOCK_TIME

@@ -26,6 +26,7 @@ const LAYER_CONFIGS := [
 var scroll_z : float = 0.0
 var cam_x    : float = 0.0
 var _curve_x : PackedFloat32Array = PackedFloat32Array()
+var hill_px  : float = 0.0
 var _textures : Array[Texture2D] = []
 
 func _ready() -> void:
@@ -34,10 +35,11 @@ func _ready() -> void:
 		if t:
 			_textures.append(t)
 
-func update_state(sz: float, cx: float, p_curve_x: PackedFloat32Array = PackedFloat32Array()) -> void:
+func update_state(sz: float, cx: float, p_curve_x: PackedFloat32Array = PackedFloat32Array(), p_hill_px: float = 0.0) -> void:
 	scroll_z = sz
 	cam_x    = cx
 	_curve_x = p_curve_x
+	hill_px  = p_hill_px
 	queue_redraw()
 
 func _tex_idx(k: int, side: int, layer: int) -> int:
@@ -46,6 +48,7 @@ func _tex_idx(k: int, side: int, layer: int) -> int:
 func _draw() -> void:
 	if _textures.is_empty():
 		return
+	var hy := HORIZON_Y + hill_px
 
 	var entries : Array = []
 
@@ -69,7 +72,7 @@ func _draw() -> void:
 				if depth < 0.02:
 					continue
 
-				var ground_y := HORIZON_Y + depth * (ROAD_BOTTOM_Y - HORIZON_Y)
+				var ground_y := hy + depth * (ROAD_BOTTOM_Y - hy)
 				var road_hw := depth * ROAD_HW_MAX
 				var cx_curve := 0.0
 				var ns := _curve_x.size()

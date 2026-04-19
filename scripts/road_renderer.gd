@@ -106,36 +106,50 @@ func _draw() -> void:
 			draw_rect(Rect2(road_cx - lw * 0.5, y_top, lw, strip_h), COL_LANE_Y)
 
 	# ── 헤드라이트 콘 ──────────────────────────────────────────────────────────
-	# 차에 달린 등이므로 화면 중앙(전방) 기준으로만 퍼짐. 도로 소실점(코너)과는 무관.
-	const HL_APEX_X   := 132.0
-	const HL_APEX_Y   := 620.0
-	const HL_OUTER_W  := 360.0   # 지평선 바깥 끝 (넓은 빛)
-	const HL_INNER_W  := 62.0    # 지평선 안쪽 끝(중앙 쪽)
+	const HL_APEX_X  := 132.0
+	const HL_APEX_Y  := 620.0
+	const HL_OUTER_W := 340.0
+	const HL_INNER_W := 240.0   # 중앙 너머까지 뻗어야 도로 위에서 자연스럽게 겹침
 
-	var beam_cx := SCREEN_W * 0.5
+	var beam_cx  := SCREEN_W * 0.5
+	var c_apex   := Color(0.96, 0.90, 0.62, 0.88)
+	var c_center := Color(0.96, 0.90, 0.62, 0.08)   # 수평선 중앙 미광 (좌우 그라데이션용)
+	var c_zero   := Color(0.0, 0.0, 0.0, 0.0)
 
-	# 가까운 쪽(등 주변)은 밝게, 소실점 쪽(지평선)은 거리 감쇠로 옅게 — 정점 간 보간
-	var beam_apex := Color(0.96, 0.90, 0.62, 0.90)
-	const HL_FAR_ALPHA := 0.055
-	var beam_far := Color(0.82, 0.72, 0.46, HL_FAR_ALPHA)
-	# 바깥 끝은 공기 중 더 퍼지는 느낌으로 살짝 더 옅게
-	var beam_far_outer := Color(beam_far.r, beam_far.g, beam_far.b, HL_FAR_ALPHA * 0.65)
-
-	# 왼쪽 헤드라이트 → 우측으로 퍼지는 삼각형 (지평선: 바깥·안쪽 모두 약하게)
+	# 왼쪽 글로우
 	draw_polygon(
 		PackedVector2Array([
-			Vector2(SCREEN_W * 0.5 - HL_APEX_X, HL_APEX_Y),
+			Vector2(beam_cx - HL_APEX_X, HL_APEX_Y),
+			Vector2(beam_cx - HL_OUTER_W - 60.0, hy),
+			Vector2(beam_cx + HL_INNER_W + 40.0, hy),
+		]),
+		PackedColorArray([Color(c_apex.r, c_apex.g, c_apex.b, 0.20), c_zero, c_zero]))
+
+	# 왼쪽 코어 (4점: outer-dark → center-dim → inner-dark, 좌우 그라데이션)
+	draw_polygon(
+		PackedVector2Array([
+			Vector2(beam_cx - HL_APEX_X, HL_APEX_Y),
 			Vector2(beam_cx - HL_OUTER_W, hy),
+			Vector2(beam_cx,              hy),
 			Vector2(beam_cx + HL_INNER_W, hy),
 		]),
-		PackedColorArray([beam_apex, beam_far_outer, beam_far])
-	)
-	# 오른쪽 헤드라이트 → 좌측으로 퍼지는 삼각형
+		PackedColorArray([c_apex, c_zero, c_center, c_zero]))
+
+	# 오른쪽 글로우
 	draw_polygon(
 		PackedVector2Array([
-			Vector2(SCREEN_W * 0.5 + HL_APEX_X, HL_APEX_Y),
+			Vector2(beam_cx + HL_APEX_X, HL_APEX_Y),
+			Vector2(beam_cx - HL_INNER_W - 40.0, hy),
+			Vector2(beam_cx + HL_OUTER_W + 60.0, hy),
+		]),
+		PackedColorArray([Color(c_apex.r, c_apex.g, c_apex.b, 0.20), c_zero, c_zero]))
+
+	# 오른쪽 코어
+	draw_polygon(
+		PackedVector2Array([
+			Vector2(beam_cx + HL_APEX_X, HL_APEX_Y),
 			Vector2(beam_cx - HL_INNER_W, hy),
+			Vector2(beam_cx,              hy),
 			Vector2(beam_cx + HL_OUTER_W, hy),
 		]),
-		PackedColorArray([beam_apex, beam_far, beam_far_outer])
-	)
+		PackedColorArray([c_apex, c_zero, c_center, c_zero]))
