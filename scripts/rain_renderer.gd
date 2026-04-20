@@ -4,17 +4,17 @@ const SCREEN_W := 1280.0
 const SCREEN_H := 720.0
 
 # ── 공중 빗줄기 (차창 밖 비) ────────────────────────────────
-const N_AIR_DROPS   := 260
+const N_AIR_DROPS   := 420
 const AIR_SPEED     := 720.0
 const AIR_LEAN_DEG  := 12.0
 const AIR_LEN       := 22.0
 
 # ── 유리 물방울 풀 ──────────────────────────────────────────
-const MAX_DROPS        := 200
-const SPAWN_RATE       := 65.0    # drops/sec
-const SLIDE_THRESHOLD  := 4.2     # 이 반지름(px) 이상이면 미끄러짐
-const SLIDE_ACCEL_K    := 38.0    # 가속도 계수
-const MAX_STRETCH      := 2.6
+const MAX_DROPS        := 350
+const SPAWN_RATE       := 220.0   # drops/sec
+const SLIDE_THRESHOLD  := 3.5     # 이 반지름(px) 이상이면 미끄러짐
+const SLIDE_ACCEL_K    := 45.0    # 가속도 계수
+const MAX_STRETCH      := 3.0
 const MERGE_FACTOR     := 0.82    # 반지름합의 82% 이내면 병합
 
 # ── 와이퍼 감지 ─────────────────────────────────────────────
@@ -65,7 +65,7 @@ func _ready() -> void:
 	_dvy.resize(MAX_DROPS)
 	_dstretch.resize(MAX_DROPS)
 	for i in MAX_DROPS:
-		_dr[i] = 0.0
+		_dr[i]       = 0.0
 		_dstretch[i] = 1.0
 
 	_shader_mat = ShaderMaterial.new()
@@ -159,12 +159,12 @@ func _spawn_one() -> void:
 			_dx[i] = randf() * SCREEN_W
 			_dy[i] = randf() * SCREEN_H
 			var roll := randf()
-			if roll < 0.68:
-				_dr[i] = 1.2 + randf() * 2.3     # 작음 — 붙어서 정지
-			elif roll < 0.92:
-				_dr[i] = 3.3 + randf() * 2.4     # 중간
+			if roll < 0.60:
+				_dr[i] = 1.5 + randf() * 2.5     # 작음
+			elif roll < 0.88:
+				_dr[i] = 3.8 + randf() * 3.0     # 중간
 			else:
-				_dr[i] = 5.2 + randf() * 3.5     # 큰 — 미끄러질 가능성
+				_dr[i] = 6.0 + randf() * 6.0     # 큰 — 확실히 미끄러짐
 			_dvy[i] = 0.0
 			_dstretch[i] = 1.0
 			return
