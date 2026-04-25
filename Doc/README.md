@@ -18,7 +18,8 @@
 | [06-threats.md](06-threats.md) | 자연 위협·적 위협·환각 위협 카테고리, 사슴머리(보스) | 위협 카테고리·환각 시스템 |
 | [19-enemies.md](19-enemies.md) | 적 5종 (와쳐·러너·점퍼·워커·앰부서) 행동·충돌·설계 의도 | 적 AI·충돌 판정 구현 |
 | [20-maintenance.md](20-maintenance.md) | 정비 구간 (파츠 교체·수리·잡품 판매·루트 선택) | 스테이지 간 정비 UI 구현 |
-| [21-meta-progression.md](21-meta-progression.md) | 메타 진행 (포인트·스킬 트리·4브랜치 퍽 20종) | 런 간 성장·메인 메뉴 구현 |
+| [21-meta-progression.md](21-meta-progression.md) | 메타 진행 (포인트·스킬 트리·4브랜치 퍽 20종 + 진엔딩 퍽 잠긴 칸) | 런 간 성장·메인 메뉴 구현 |
+| [22-true-ending.md](22-true-ending.md) | 진엔딩 시스템 (시체 발견·트렁크 점유·A/B 분기·단서 조합·라디오 텍스트 변화) | 엔딩 분기·진엔딩 연출 구현 |
 | [07-vhs.md](07-vhs.md) | 자원 상태 → 화면 효과 매핑표, VHS 기본 레이어(스캔라인·그레인·타임코드) | 화면 효과·포스트프로세싱 |
 | [08-monster-chase.md](08-monster-chase.md) | 괴물 추격 속도·거리 시스템, 룸미러 얼굴/포커싱 2모드, 거점 체류 제한, 엔딩 E | 괴물·룸미러·시간 압박 시스템 |
 | [09-wiper.md](09-wiper.md) | 와이퍼 조작, 빗물 누적, 고장 조건, 라디오·정신력·색수차 연동 | 와이퍼·우천 연출 작업 |
@@ -39,7 +40,7 @@
 - **"적 종류별 행동은?"** → [19-enemies.md](19-enemies.md)
 - **"색수차 강도 수치?"** → [12-art-direction.md](12-art-direction.md)
 - **"Pseudo 3D 투영 코드?"** → [15-tech-overview.md](15-tech-overview.md)
-- **"엔딩 조건은?"** → [11-narrative.md](11-narrative.md)
+- **"엔딩 조건은?"** → [11-narrative.md](11-narrative.md) (분기 표) + [22-true-ending.md](22-true-ending.md) (진엔딩 상세)
 - **"갓길 폐차 수색은 어떻게?"** → [17-scavenging.md](17-scavenging.md)
 - **"라디오 죽음의 주파수는?"** → [18-radio.md](18-radio.md)
 - **"스테이지 클리어 후 정비는?"** → [20-maintenance.md](20-maintenance.md)
