@@ -17,10 +17,25 @@ var _hud     : CanvasLayer
 var _rain_layer : CanvasLayer
 var _rain    : Node2D
 var _obstacles: LastRoadObstacles
+var _watchers : LastRoadWatchers
 var _camera   : Camera2D
 
-var _monster_distance: float = 60.0  # 초기 괴물 간격 (세계 단위, 600은 지평선 너머였음)
-const MONSTER_SPEED := 90.0           # 괴물 고정 속도 (km/h)
+var _monster_distance: float = 60.0  # 초기 괴물 간격 (세계 단위)
+var _sanity_ratio: float = 1.0        # 정신력 (1.0 = 정상, 0.0 = 패닉)
+
+# ── 스테이지 진행 시스템 ─────────────────────────────────────
+const MONSTER_SPEEDS := [70.0, 80.0, 90.0, 100.0, 110.0, 120.0]  # 스테이지 1~6
+const STAGE_LENGTH  := 600.0    # 각 스테이지 목표 거리 (세계 단위, 밸런스 조정용)
+const TOTAL_STAGES  := 6
+
+var current_stage     : int   = 1
+var stage_start_z     : float = 0.0     # 스테이지 시작 시점의 scroll_z
+
+# 게임 상태: "playing", "stage_clear", "game_over"
+var _game_state       : String = "playing"
+var _state_timer      : float = 0.0
+const STAGE_CLEAR_DURATION := 3.0
+const GAMEOVER_FADE_DURATION := 1.5
 
 # ── 배경 무한 스크롤 (코너에서만 누적) ────────────────────────
 var _sky_tile_w := 1.0
@@ -44,6 +59,7 @@ const _VehicleScript = preload("res://scripts/vehicle.gd")
 const _HudScript     = preload("res://scripts/hud.gd")
 const _ObstacleScript = preload("res://scripts/obstacle_system.gd")
 const _RainScript    = preload("res://scripts/rain_renderer.gd")
+const _WatcherScript = preload("res://scripts/watcher_system.gd")
 
 var _mtn_base_y: float = 0.0
 var _sky_base_y: float = 0.0
@@ -63,6 +79,7 @@ func _ready() -> void:
 	_build_mountain_tiled()
 	_road    = _RoadScript.new();    add_child(_road)
 	_trees   = _TreeScript.new();    add_child(_trees)
+	_watchers = _WatcherScript.new(); add_child(_watchers)
 	_obstacles = _ObstacleScript.new(); add_child(_obstacles)
 	_vehicle = _VehicleScript.new(); add_child(_vehicle)
 	# rain은 화면 고정이어야 하므로 CanvasLayer에 올려 카메라 줌/패럴랙스 영향 차단
@@ -141,32 +158,89 @@ func _apply_pair_scroll(a: Sprite2D, b: Sprite2D, scroll: float, tile_w: float) 
 
 # ─────────────────────────────────────────────────────────────
 func _process(delta: float) -> void:
+	if _game_state == "game_over":
+		_state_timer += delta
+		var fade := clampf(_state_timer / GAMEOVER_FADE_DURATION, 0.0, 1.0)
+		_hud.set_gameover_fade(fade)
+		# 카메라 줌 리셋 (룸미러 보는 중 게임오버 시 대응)
+		_hud._focus_t = maxf(_hud._focus_t - delta * 5.0, 0.0)
+		var ease_go := smoothstep(0.0, 1.0, _hud._focus_t)
+		_camera.zoom = Vector2(1.0, 1.0).lerp(Vector2(2.2, 2.2), ease_go)
+		_camera.position = Vector2(640.0, 360.0).lerp(Vector2(665.0, 120.0), ease_go)
+		return
+	
+	if _game_state == "stage_clear":
+		_state_timer += delta
+		if _state_timer >= STAGE_CLEAR_DURATION:
+			_advance_to_next_stage()
+		return
+	
+	# ── playing 상태 ──
 	_vehicle.handle_input(delta)
 	_vehicle.update_scroll(delta)
+	_vehicle.update_fuel(delta)
 	_vehicle.update_rpm(delta)
 	var curve_x := _vehicle.compute_strip_curve_offsets()
 	var hill_px := _vehicle.hill_offset_px()
 	
-	# 괴물 간격 업데이트 (km/h -> 세계 단위 변환율 SCROLL_RATE = 0.05)
-	var speed_diff := _vehicle.speed - MONSTER_SPEED
+	# 괴물 간격 업데이트
+	var monster_speed := float(MONSTER_SPEEDS[clampi(current_stage - 1, 0, TOTAL_STAGES - 1)])
+	var speed_diff := _vehicle.speed - monster_speed
 	_monster_distance += speed_diff * 0.05 * delta
 	_monster_distance = maxf(_monster_distance, 0.0)
 	
+	# ── 게임오버 체크: 괴물에게 따라잡힘 ──
+	if _monster_distance <= 0.0:
+		_game_state = "game_over"
+		_state_timer = 0.0
+		_hud.show_gameover()
+		return
+	
+	# ── 스테이지 클리어 체크 ──
+	var stage_distance := _vehicle.scroll_z - stage_start_z
+	if stage_distance >= STAGE_LENGTH:
+		if current_stage >= TOTAL_STAGES:
+			# 최종 스테이지 클리어 = 엔딩
+			_game_state = "stage_clear"
+			_state_timer = 0.0
+			_hud.show_stage_clear(current_stage, true)
+		else:
+			_game_state = "stage_clear"
+			_state_timer = 0.0
+			_hud.show_stage_clear(current_stage, false)
+		return
+	
+	# 정신력 업데이트 (괴물이 40 단위 이내로 다가오면 공포감으로 감소)
+	# GDD: 자동 회복 없음. 담배와 정비 구간에서만 회복
+	if _monster_distance < 40.0:
+		var drain_spd := (40.0 - _monster_distance) * 0.0025
+		_sanity_ratio -= drain_spd * delta
+	
+	# 라디오 죽음의 주파수: 정신력 -2/초 (GDD 18-radio.md)
+	if _hud.get_radio_on_death():
+		_sanity_ratio -= 0.02 * delta  # 2% per second
+	
+	_sanity_ratio = clampf(_sanity_ratio, 0.0, 1.0)
+	
 	_update_backdrops(delta)
 	_update_backdrops_vertical(delta, hill_px)
-	_hud.update(_vehicle.speed, _vehicle.scroll_z, _vehicle.steering_angle, _vehicle.rpm, _monster_distance, delta)
+	_hud.update(_vehicle.speed, _vehicle.scroll_z, _vehicle.steering_angle, _vehicle.rpm, _monster_distance, delta, _vehicle.fuel_ratio, _sanity_ratio, current_stage, stage_distance, STAGE_LENGTH)
+	_rain.vehicle_speed = _vehicle.speed
 	
 	# 카메라 줌 업데이트 (전체 화면 줌)
-	var ease_t := smoothstep(0.0, 1.0, _hud._focus_t)
 	var screen_center := Vector2(640.0, 360.0)
 	
-	# 룸미러의 중심 (665, 81). 
-	# 카메라가 이 좌표를 향하면 룸미러가 화면 정중앙에 옵니다.
-	# 룸미러가 화면 중앙보다 약간 위쪽에 오게 하려면, 카메라가 살짝 아래를 봐야 하므로 y값을 늘려줍니다.
-	var target_camera_pos := Vector2(665.0, 120.0) 
-	
-	_camera.zoom = Vector2(1.0, 1.0).lerp(Vector2(2.2, 2.2), ease_t)
-	_camera.position = screen_center.lerp(target_camera_pos, ease_t)
+	if _hud._radio_focus_t > 0.0:
+		var radio_ease_t := smoothstep(0.0, 1.0, _hud._radio_focus_t)
+		# 라디오 위치 주변으로 줌. 라디오 패널 중앙 정도
+		var target_camera_pos: Vector2 = _hud.RADIO_PANEL_POS + Vector2(100.0, 36.0)
+		_camera.zoom = Vector2(1.0, 1.0).lerp(Vector2(2.5, 2.5), radio_ease_t)
+		_camera.position = screen_center.lerp(target_camera_pos, radio_ease_t)
+	else:
+		var ease_t := smoothstep(0.0, 1.0, _hud._focus_t)
+		var target_camera_pos := Vector2(665.0, 120.0) 
+		_camera.zoom = Vector2(1.0, 1.0).lerp(Vector2(2.2, 2.2), ease_t)
+		_camera.position = screen_center.lerp(target_camera_pos, ease_t)
 	
 	_rain.set_wiper_transforms(
 		_hud._wiper_pivot_L.position, _hud._wiper_pivot_L.rotation,
@@ -175,8 +249,37 @@ func _process(delta: float) -> void:
 	_road.update_state(_vehicle.scroll_z, _vehicle.cam_x, curve_x, hill_px)
 	_trees.update_state(_vehicle.scroll_z, _vehicle.cam_x, curve_x, hill_px)
 	_obstacles.update_state(_vehicle.scroll_z, _vehicle.cam_x, curve_x, hill_px)
+	_watchers.update_state(_vehicle.scroll_z, _vehicle.cam_x, curve_x, hill_px)
 	if _obstacles.check_collision(_vehicle):
 		_hud.on_rock_hit()
+	if _watchers.check_collision(_vehicle):
+		# 와쳐: 속도 살짝 감소 + 정신력 감소 (GDD: 충돌 효과 + 정신력 -5~-20)
+		_vehicle.apply_watcher_hit()
+		_sanity_ratio -= 0.10  # 정신력 10% 감소
+		_sanity_ratio = clampf(_sanity_ratio, 0.0, 1.0)
+		_hud.on_watcher_hit()
+
+# ── 다음 스테이지로 진행 ────────────────────────────────────
+func _advance_to_next_stage() -> void:
+	if current_stage >= TOTAL_STAGES:
+		# TODO: 엔딩 씨은 처리
+		return
+	
+	current_stage += 1
+	stage_start_z = _vehicle.scroll_z
+	_monster_distance = 60.0
+	
+	# 연료 만킱 충전
+	_vehicle.fuel = _vehicle.FUEL_MAX
+	_vehicle.fuel_ratio = 1.0
+	
+	# 정신력: 50% 미만이면 50%까지 회복 (04-resources.md)
+	if _sanity_ratio < 0.5:
+		_sanity_ratio = 0.5
+	
+	_game_state = "playing"
+	_hud.hide_stage_overlay()
+	_hud.update_radio_for_stage(current_stage)
 
 
 # ── 코너일 때만 하늘·산 가로 패럴랙스 (무한 타일) ────────────

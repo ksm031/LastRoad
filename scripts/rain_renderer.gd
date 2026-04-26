@@ -18,11 +18,12 @@ const MAX_STRETCH      := 3.0
 const MERGE_FACTOR     := 0.82    # 반지름합의 82% 이내면 병합
 
 # ── 와이퍼 감지 ─────────────────────────────────────────────
-const WIPER_REACH := 340.0
+const WIPER_REACH := 442.0  # HUD에서 스케일이 1.3배 커졌으므로 340.0 -> 442.0으로 증가
 const WIPER_MIN   := 10.0
 
 # ── 상태 ───────────────────────────────────────────────────
 var is_raining : bool = false
+var vehicle_speed : float = 0.0
 
 # 공중 빗줄기
 var _rx : PackedFloat32Array
@@ -135,14 +136,32 @@ func _process(delta: float) -> void:
 # ── 공중 빗줄기 ─────────────────────────────────────────────
 func _update_air(delta: float) -> void:
 	var lean := deg_to_rad(AIR_LEAN_DEG)
-	var vx := sin(lean) * AIR_SPEED
-	var vy := cos(lean) * AIR_SPEED
+	var vx_base := sin(lean) * AIR_SPEED
+	var vy_base := cos(lean) * AIR_SPEED
+	
+	# 속도에 비례하는 퍼짐 효과 (차가 빠를수록 좌우로 비가 갈라짐)
+	var spread_factor := vehicle_speed * 0.015
+	var center_x := SCREEN_W * 0.5
+	
 	for i in N_AIR_DROPS:
-		_rx[i] += vx * _rs[i] * delta
-		_ry[i] += vy * _rs[i] * delta
-		if _ry[i] > SCREEN_H + 15.0:
+		var x := _rx[i]
+		var y := _ry[i]
+		
+		var dx := x - center_x
+		# 화면 중앙을 기준으로 좌우로 퍼지는 속도 추가
+		var vx := vx_base + dx * spread_factor * _rs[i]
+		
+		# y 속도는 기본 낙하 속도 + 차속에 따른 가속(빠를수록 비가 더 세차게 스쳐 지나감)
+		var vy := vy_base + vehicle_speed * 2.5 * _rs[i]
+		
+		_rx[i] += vx * delta
+		_ry[i] += vy * delta
+		
+		# 화면 밖으로 나가면 다시 저 멀리 위에서 떨어지도록 스폰
+		if _ry[i] > SCREEN_H + 15.0 or _rx[i] < -200.0 or _rx[i] > SCREEN_W + 200.0:
+			# 기본 스폰 (위에서 아래로)
 			_rx[i] = randf() * SCREEN_W
-			_ry[i] = randf_range(-90.0, -5.0)
+			_ry[i] = randf_range(-150.0, -10.0)
 
 
 # ── 유리 방울 스폰 ──────────────────────────────────────────
@@ -218,8 +237,8 @@ func _wipe_drops() -> void:
 		var a1 := _wa_curr[w]
 		if is_equal_approx(a0, a1):
 			continue
-		var amin := minf(a0, a1)
-		var amax := maxf(a0, a1)
+		var amin := minf(a0, a1) - 0.08  # 와이퍼 블레이드의 두께(약 4.5도)를 고려하여 패딩 추가
+		var amax := maxf(a0, a1) + 0.08  # 이렇게 하면 올라갈 때도 두께만큼 앞서서 지워지므로 깔끔해 보임
 		for i in MAX_DROPS:
 			if _dr[i] < 0.01:
 				continue
@@ -279,15 +298,33 @@ func _draw() -> void:
 	if not is_raining:
 		return
 	var lean := deg_to_rad(AIR_LEAN_DEG)
-	var ex := sin(lean)
-	var ey := cos(lean)
+	var vx_base := sin(lean) * AIR_SPEED
+	var vy_base := cos(lean) * AIR_SPEED
+	
+	var spread_factor := vehicle_speed * 0.015
+	var center_x := SCREEN_W * 0.5
+	
 	for i in N_AIR_DROPS:
 		var x := _rx[i]
 		var y := _ry[i]
 		var sp := _rs[i]
+		
+		# 현재 위치에서의 실제 속도 벡터 계산 (선이 그려지는 방향)
+		var dx := x - center_x
+		var vx := vx_base + dx * spread_factor * sp
+		var vy := vy_base + vehicle_speed * 2.5 * sp
+		
+		var v_len := sqrt(vx*vx + vy*vy)
+		var ex := vx / v_len if v_len > 0.0 else 0.0
+		var ey := vy / v_len if v_len > 0.0 else 1.0
+		
 		var t := clampf(y / SCREEN_H, 0.0, 1.0)
 		var a := 0.22 + t * 0.38 + (sp - 0.55) * 0.12
 		var ln := AIR_LEN * (0.5 + t * 0.7 + (sp - 0.55) * 0.4)
+		
+		# 속도가 빠를수록 빗줄기도 더 길어짐
+		ln *= clampf(v_len / AIR_SPEED, 1.0, 3.5)
+		
 		draw_line(
 			Vector2(x, y),
 			Vector2(x + ex * ln, y + ey * ln),

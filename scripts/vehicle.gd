@@ -5,10 +5,25 @@ const _Road = preload("res://scripts/road_renderer.gd")
 
 # ── 차량 파라미터 ────────────────────────────────────────────
 const MAX_SPEED     := 240.0   # km/h
-const ACCEL         := 60.0    # km/h/s
-const BRAKE_FORCE   := 105.0   # km/h/s (브레이크 감도)
-const DRAG          := 20.0    # 자연 감속
+const ACCEL         := 11.0    # km/h/s  (제로백 ~9초, 일반 승용차 수준)
+const BRAKE_FORCE   := 35.0    # km/h/s  (100→0 약 2.9초, 일반 차량 기준)
+const DRAG          := 5.0     # 자연 감속 (엔진 브레이크 수준)
 const LATERAL_SPEED := 2.5     # cam_x(차선) 단위/초
+
+# ── 연료 파라미터 ────────────────────────────────────────────
+const FUEL_MAX           := 40.0   # L  (기본 탱크 용량)
+const FUEL_RATE_BASE     := 5.5    # L/km  (기본 소모율)
+# scroll_z 1.0 = SCROLL_RATE(0.05) * speed(km/h) * dt
+# 1 km ≈ scroll_z 50  (SCROLL_RATE * 1000).  따라서  L/s = FUEL_RATE_BASE * speed * SCROLL_RATE / 1000 * speed?  아니요.
+# 세계 단위 변환: 1 km = 1000 m. scroll_z 단위는 "세계 단위". SCROLL_RATE = 0.05 → speed 100 km/h 에서 5.0 /s.
+# 1 km ≈ 어떤 scroll_z? → scroll_z는 실제 거리 단위가 아니므로,
+# 우리는 단순히  km/h → km/s 변환 후 소모율을 곱합니다.
+# fuel_consumed_per_sec = (speed_km_h / 3600.0) * FUEL_RATE_BASE
+# 이러면 100 km/h 에서  100/3600 * 5.5 ≈ 0.153 L/s  →  40L로 약 261초(4.3분) 주행 가능
+# GDD 기준: 만땅 40L로 7.2 km → 80 km/h 기본속도에서  7.2/80*3600 = 324초(5.4분)
+# → 소모율 조정:  fuel/s = speed / 3600 * FUEL_RATE_BASE * FUEL_DRAIN_MULT
+const FUEL_DRAIN_MULT    := 0.75   # 밸런스 조정용 배율 (GDD 기준 만땅 ~5분 주행)
+const FUEL_EMPTY_MAX_SPD := 15.0   # 0L 시 최고속도 (기어가는 수준)
 
 # ── 핸들 파라미터 ────────────────────────────────────────────
 const MAX_STEER_DEG := 35.0
@@ -54,6 +69,10 @@ var steering_angle : float = 0.0
 var rpm            : float = 800.0
 var gear           : int   = 0
 var _player_steer_offset : float = 0.0
+
+# ── 연료 상태 ────────────────────────────────────────────────
+var fuel           : float = FUEL_MAX  # 현재 연료 (L)
+var fuel_ratio     : float = 1.0       # fuel / FUEL_MAX (0~1), HUD 표시용
 
 # ── 방해물(돌) 패널티 ─────────────────────────────────────────
 const ROCK_HIT_SPEED   := 15.0  # “시속 10km대”
@@ -139,25 +158,35 @@ func handle_input(delta: float) -> void:
 	if _accel_lock > 0.0:
 		_accel_lock = maxf(_accel_lock - delta, 0.0)
 
+	var v_pressed := Input.is_key_pressed(KEY_V)
 	var w := Input.is_key_pressed(KEY_W) or Input.is_action_pressed("ui_up")
 	var s := Input.is_key_pressed(KEY_S) or Input.is_action_pressed("ui_down")
-	var a := Input.is_key_pressed(KEY_A) or Input.is_action_pressed("ui_left")
-	var d := Input.is_key_pressed(KEY_D) or Input.is_action_pressed("ui_right")
+	var a := (Input.is_key_pressed(KEY_A) or Input.is_action_pressed("ui_left")) and not v_pressed
+	var d := (Input.is_key_pressed(KEY_D) or Input.is_action_pressed("ui_right")) and not v_pressed
 
 	if _accel_lock > 0.0:
 		w = false
 
+	# 연료에 따른 실효 최고속도 계산
+	var effective_max := _get_effective_max_speed()
+
 	if w:
-		speed = minf(speed + ACCEL * delta, MAX_SPEED)
+		speed = minf(speed + ACCEL * delta, effective_max)
 	elif s:
 		speed = maxf(speed - BRAKE_FORCE * delta, 0.0)
 	else:
 		speed = maxf(speed - DRAG * delta, 0.0)
 
+	# 연료 0이면 현재 속도도 실효 최고속도 이하로 자연 감속
+	if speed > effective_max:
+		speed = maxf(speed - DRAG * 2.0 * delta, effective_max)
+
+	# 차량 속도에 비례하여 좌우 조향(차선 변경) 속도 조절
+	var lateral_mult := clampf(speed / 50.0, 0.0, 1.0)
 	if a:
-		cam_x = maxf(cam_x - LATERAL_SPEED * delta, -1.0)
+		cam_x = maxf(cam_x - LATERAL_SPEED * lateral_mult * delta, -1.0)
 	elif d:
-		cam_x = minf(cam_x + LATERAL_SPEED * delta, 1.0)
+		cam_x = minf(cam_x + LATERAL_SPEED * lateral_mult * delta, 1.0)
 
 	# 코너 구간이면 기본으로 핸들이 돌아가고, A/D는 거기에 "추가로" 더 꺾는 방식
 	var k := curvature_at_scroll()
@@ -175,6 +204,26 @@ func handle_input(delta: float) -> void:
 
 func update_scroll(delta: float) -> void:
 	scroll_z += speed * SCROLL_RATE * delta
+
+
+## 매 프레임 연료 소모. game_world._process()에서 update_scroll 다음에 호출.
+func update_fuel(delta: float) -> void:
+	if fuel <= 0.0:
+		fuel = 0.0
+		fuel_ratio = 0.0
+		return
+	# 소모량 = (속도 km/h → km/s) × 소모율(L/km) × 밸런스 배율
+	var consumption := (speed / 3600.0) * FUEL_RATE_BASE * FUEL_DRAIN_MULT
+	fuel = maxf(fuel - consumption * delta, 0.0)
+	fuel_ratio = fuel / FUEL_MAX
+
+
+## 연료 잔량에 따른 실효 최고속도
+func _get_effective_max_speed() -> float:
+	if fuel > 0.0:
+		return MAX_SPEED
+	# 연료 0: 엔진 꺼짐 → 관성 주행, 최고속도 급감
+	return FUEL_EMPTY_MAX_SPD
 
 func update_rpm(delta: float) -> void:
 	if speed < 1.0:
@@ -195,3 +244,8 @@ func apply_rock_hit() -> void:
 	if speed < ROCK_HIT_SPEED:
 		speed = ROCK_HIT_SPEED
 	_accel_lock = ACCEL_LOCK_TIME
+
+func apply_watcher_hit() -> void:
+	# 와쳐 충돌: 속도 살짝 감소 (20% 감속) + 짧은 가속 불가
+	speed *= 0.8
+	_accel_lock = 0.1
