@@ -2,10 +2,10 @@ shader_type canvas_item;
 
 const int MAX_DROPS = 350;
 
-uniform sampler2D screen_texture : hint_screen_texture, repeat_disable, filter_linear;
+uniform sampler2D screen_texture : hint_screen_texture, repeat_disable, filter_linear_mipmap;
 uniform vec2  screen_size = vec2(1280.0, 720.0);
 uniform vec4  drops[MAX_DROPS];                  // xy=pos(px), z=radius(px), w=stretch
-uniform float wet_amount : hint_range(0.0, 1.0) = 0.0;
+uniform sampler2D wipe_mask : hint_default_white; // 와이퍼로 지워진 안개 마스크
 
 void fragment() {
 	vec2 pixel = SCREEN_UV * screen_size;
@@ -58,17 +58,27 @@ void fragment() {
 
 	vec2 refract_uv = SCREEN_UV + total_offset / screen_size;
 
+	// 마스크 텍스처에서 현재 픽셀의 안개 농도를 읽어옴
+	float fog_factor = texture(wipe_mask, SCREEN_UV).r;
+
+	// 비로 인한 시야 방해 효과 (흐림)
+	float blur_lod = fog_factor * 2.2;
+
 	// 색수차
 	vec2  ca    = total_offset * 0.08 / screen_size;
-	float red   = texture(screen_texture, refract_uv + ca).r;
-	float green = texture(screen_texture, refract_uv).g;
-	float blue  = texture(screen_texture, refract_uv - ca).b;
+	float red   = textureLod(screen_texture, refract_uv + ca, blur_lod).r;
+	float green = textureLod(screen_texture, refract_uv, blur_lod).g;
+	float blue  = textureLod(screen_texture, refract_uv - ca, blur_lod).b;
 	vec3  refracted = vec3(red, green, blue);
 
 	// ── 방울 자체에만 물 색 틴트 ─────────────────────────────
-	// 실제 물방울은 약간 맑고 투명한 파란빛
 	vec3 water_color = vec3(0.72, 0.88, 1.00);
 	vec3 color = mix(refracted, refracted * water_color, drop_mask * 0.28);
+
+	// ── 전체 유리 물막/김서림 틴트 (시야 방해) ───────────────
+	// 빗방울 위에도 틴트가 덮이므로, 안개가 짙으면 빗방울도 뿌옇게 보입니다.
+	vec3 glass_tint = vec3(0.8, 0.85, 0.9);
+	color = mix(color, glass_tint, fog_factor * 0.15);
 
 	// 스펙큘러
 	color += vec3(1.0, 0.98, 0.94) * highlight * 0.70;

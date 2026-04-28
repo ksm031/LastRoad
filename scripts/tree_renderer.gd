@@ -6,7 +6,7 @@ const ROAD_HW_MAX    := 650.0
 const CAMERA_DEPTH   := 0.84
 
 const TREE_BASE_H    := 480.0
-const DZ_MIN         := 0.4
+const DZ_MIN         := 0.05
 const DZ_MAX         := 72.0
 # 도로(차선) 쪽으로 당겨지는 산란을 상쇄 — depth 1 기준 픽셀, 바깥으로만 밀기
 const TREE_MARGIN_FROM_ROAD := 28.0
@@ -27,6 +27,7 @@ var scroll_z : float = 0.0
 var cam_x    : float = 0.0
 var _curve_x : PackedFloat32Array = PackedFloat32Array()
 var hill_px  : float = 0.0
+var scavenging_sys: Node2D = null
 var _textures : Array[Texture2D] = []
 
 func _ready() -> void:
@@ -65,10 +66,15 @@ func _draw() -> void:
 			for k in range(k_min, k_max + 1):
 				var wz  := float(k) * spacing + z_offset
 				var dz  := wz - scroll_z
-				if dz <= 0.0:
+				# dz가 0 이하면 이미 지나친 것 - 즉시 제거 (화면 경계 정지 방지)
+				if dz <= 0.0 or dz < DZ_MIN:
+					continue
+					
+				if scavenging_sys != null and scavenging_sys.is_in_clear_zone(wz, side):
 					continue
 
-				var depth := clampf(CAMERA_DEPTH / dz, 0.0, 1.0)
+				# 클램프 없이 실제 깊이 적용 (거리가 매우 가까워지면 depth 급증)
+				var depth: float = CAMERA_DEPTH / dz
 				if depth < 0.02:
 					continue
 
@@ -106,6 +112,19 @@ func _draw() -> void:
 					"fade": fade
 				})
 
+	if scavenging_sys != null and scavenging_sys.has_method("get_draw_entries"):
+		entries.append_array(scavenging_sys.get_draw_entries())
+
 	entries.sort_custom(func(a, b): return a.d < b.d)
 	for e in entries:
-		draw_texture_rect(e.tex, e.rect, false, Color(0.32, 0.38, 0.26, e.fade))
+		if e.has("is_car"):
+			var flip_h = (e.side == 1)
+			if flip_h:
+				draw_set_transform(Vector2(e.rect.position.x + e.rect.size.x * 0.5, e.rect.position.y), 0.0, Vector2(-1, 1))
+				var local_rect := Rect2(-e.rect.size.x * 0.5, 0, e.rect.size.x, e.rect.size.y)
+				draw_texture_rect(e.tex, local_rect, false, Color(1, 1, 1, e.fade))
+				draw_set_transform(Vector2.ZERO, 0.0, Vector2(1, 1)) # 복구
+			else:
+				draw_texture_rect(e.tex, e.rect, false, Color(1, 1, 1, e.fade))
+		else:
+			draw_texture_rect(e.tex, e.rect, false, Color(0.32, 0.38, 0.26, e.fade))

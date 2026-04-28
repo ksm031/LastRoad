@@ -17,6 +17,7 @@ var _hud     : CanvasLayer
 var _rain_layer : CanvasLayer
 var _rain    : Node2D
 var _obstacles: LastRoadObstacles
+var _scavenging: LastRoadScavenging
 var _watchers : LastRoadWatchers
 var _camera   : Camera2D
 
@@ -60,6 +61,7 @@ const _HudScript     = preload("res://scripts/hud.gd")
 const _ObstacleScript = preload("res://scripts/obstacle_system.gd")
 const _RainScript    = preload("res://scripts/rain_renderer.gd")
 const _WatcherScript = preload("res://scripts/watcher_system.gd")
+const _ScavengingScript = preload("res://scripts/scavenging_system.gd")
 
 var _mtn_base_y: float = 0.0
 var _sky_base_y: float = 0.0
@@ -78,7 +80,10 @@ func _ready() -> void:
 	_build_sky_tiled()
 	_build_mountain_tiled()
 	_road    = _RoadScript.new();    add_child(_road)
-	_trees   = _TreeScript.new();    add_child(_trees)
+	_scavenging = _ScavengingScript.new(); add_child(_scavenging)
+	_trees   = _TreeScript.new();
+	_trees.scavenging_sys = _scavenging
+	add_child(_trees)
 	_watchers = _WatcherScript.new(); add_child(_watchers)
 	_obstacles = _ObstacleScript.new(); add_child(_obstacles)
 	_vehicle = _VehicleScript.new(); add_child(_vehicle)
@@ -243,10 +248,11 @@ func _process(delta: float) -> void:
 		_camera.position = screen_center.lerp(target_camera_pos, ease_t)
 	
 	_rain.set_wiper_transforms(
-		_hud._wiper_pivot_L.position, _hud._wiper_pivot_L.rotation,
-		_hud._wiper_pivot_R.position, _hud._wiper_pivot_R.rotation
+		_hud._wiper_pivot_L.global_position, _hud._wiper_pivot_L.global_rotation,
+		_hud._wiper_pivot_R.global_position, _hud._wiper_pivot_R.global_rotation
 	)
 	_road.update_state(_vehicle.scroll_z, _vehicle.cam_x, curve_x, hill_px)
+	_scavenging.update_state(_vehicle.scroll_z, _vehicle.cam_x, curve_x, hill_px)
 	_trees.update_state(_vehicle.scroll_z, _vehicle.cam_x, curve_x, hill_px)
 	_obstacles.update_state(_vehicle.scroll_z, _vehicle.cam_x, curve_x, hill_px)
 	_watchers.update_state(_vehicle.scroll_z, _vehicle.cam_x, curve_x, hill_px)

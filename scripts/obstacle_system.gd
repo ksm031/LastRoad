@@ -11,7 +11,7 @@ const HORIZON_Y_BASE := 300.0
 # ── 스폰 튜닝 ────────────────────────────────────────────────
 const SPACING_Z        := 22.0   # 큰 값일수록 덜 자주
 const SPAWN_CHANCE     := 0.14   # 0~1
-const VISIBLE_DZ_MIN   := -1.0
+const VISIBLE_DZ_MIN   := 0.05
 const VISIBLE_DZ_MAX   := 78.0
 
 # ── 충돌 튜닝 ────────────────────────────────────────────────
@@ -124,7 +124,8 @@ func _draw() -> void:
 		if dz < VISIBLE_DZ_MIN or dz > VISIBLE_DZ_MAX:
 			continue
 
-		var depth := clampf(CAMERA_DEPTH / dz, 0.0, 1.0)
+		# 클램프 없이 실제 깊이 적용
+		var depth: float = CAMERA_DEPTH / dz
 		if depth < 0.02:
 			continue
 

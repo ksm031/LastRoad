@@ -200,10 +200,9 @@ func _build_portrait_and_mirror() -> void:
 	_next_blink_time = randf_range(2.0, 4.0)
 
 func _build_wipers() -> void:
-	# 와이퍼 크기가 1.3배 커졌으므로 간격도 비례해서 넓힙니다.
-	# 기존 280, 750 (중심 515, 간격 470) -> 간격 약 611
-	_wiper_pivot_L = _make_wiper_assembly(Vector2(210.0, 450.0))
-	_wiper_pivot_R = _make_wiper_assembly(Vector2(820.0, 450.0))
+	# 와이퍼 크기가 커진 것을 감안하되 실제 탠덤 와이퍼처럼 닦이는 영역이 겹치도록 간격 조정
+	_wiper_pivot_L = _make_wiper_assembly(Vector2(280.0, 450.0))
+	_wiper_pivot_R = _make_wiper_assembly(Vector2(720.0, 450.0))
 
 func _make_wiper_assembly(pos: Vector2) -> Node2D:
 	var scale_inv := Vector2(1.0, 1.0)
@@ -669,8 +668,8 @@ func _update_shake(speed: float, scroll_z: float, steering_angle: float) -> void
 				var ph := float(Time.get_ticks_msec()) * 0.055
 				wiper_jiggle += Vector2(sin(ph * 2.5), cos(ph * 3.0)) * (IMPACT_MAG * 0.8 * kick)
 			
-			_wiper_pivot_L.position = (Vector2(210.0, 450.0) + wiper_jiggle) * scale_inv
-			_wiper_pivot_R.position = (Vector2(820.0, 450.0) + wiper_jiggle) * scale_inv
+			_wiper_pivot_L.position = (Vector2(280.0, 450.0) + wiper_jiggle) * scale_inv
+			_wiper_pivot_R.position = (Vector2(720.0, 450.0) + wiper_jiggle) * scale_inv
 	if _wheel != null:
 		_wheel.position   = Vector2(290.0, 660.0) + offset
 	if _spd_pivot != null:
@@ -679,6 +678,8 @@ func _update_shake(speed: float, scroll_z: float, steering_angle: float) -> void
 		_rpm_pivot.position = RPM_GAUGE_CENTER + offset
 	if _fuel_pivot != null:
 		_fuel_pivot.position = FUEL_GAUGE_CENTER + offset
+	if _mirror_clip != null:
+		_mirror_clip.position = MIRROR_MIN + offset
 
 	if _portrait != null and _rearview_node != null:
 		var spd_t   := speed / SPEED_MAX

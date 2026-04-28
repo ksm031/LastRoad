@@ -12,7 +12,7 @@ const AIR_LEN       := 22.0
 # ── 유리 물방울 풀 ──────────────────────────────────────────
 const MAX_DROPS        := 350
 const SPAWN_RATE       := 220.0   # drops/sec
-const SLIDE_THRESHOLD  := 3.5     # 이 반지름(px) 이상이면 미끄러짐
+const SLIDE_THRESHOLD  := 2.5     # 이 반지름(px) 이상이면 미끄러짐
 const SLIDE_ACCEL_K    := 45.0    # 가속도 계수
 const MAX_STRETCH      := 3.0
 const MERGE_FACTOR     := 0.82    # 반지름합의 82% 이내면 병합
@@ -50,6 +50,12 @@ var _shader_mat : ShaderMaterial
 var _bb         : BackBufferCopy
 var _glass      : Node2D
 
+var _mask_vp : SubViewport
+var _fog_adder : Node2D
+var _wiper_eraser : Node2D
+var _current_delta : float = 0.0
+var _air_drops_layer : Node2D
+
 # ────────────────────────────────────────────────────────────
 func _ready() -> void:
 	_rx.resize(N_AIR_DROPS)
@@ -72,7 +78,27 @@ func _ready() -> void:
 	_shader_mat = ShaderMaterial.new()
 	_shader_mat.shader = load("res://scripts/windshield_glass.gdshader")
 	_shader_mat.set_shader_parameter("screen_size", Vector2(SCREEN_W, SCREEN_H))
-	_shader_mat.set_shader_parameter("wet_amount", 0.0)
+	
+	_mask_vp = SubViewport.new()
+	_mask_vp.size = Vector2(SCREEN_W, SCREEN_H)
+	_mask_vp.disable_3d = true
+	_mask_vp.transparent_bg = false
+	_mask_vp.render_target_clear_mode = SubViewport.CLEAR_MODE_NEVER
+	_mask_vp.render_target_update_mode = SubViewport.UPDATE_ALWAYS
+	add_child(_mask_vp)
+	
+	_fog_adder = Node2D.new()
+	_fog_adder.draw.connect(_on_fog_add_draw)
+	_mask_vp.add_child(_fog_adder)
+	
+	_wiper_eraser = Node2D.new()
+	var sub_mat = CanvasItemMaterial.new()
+	sub_mat.blend_mode = CanvasItemMaterial.BLEND_MODE_SUB
+	_wiper_eraser.material = sub_mat
+	_wiper_eraser.draw.connect(_on_wiper_erase_draw)
+	_mask_vp.add_child(_wiper_eraser)
+
+	_shader_mat.set_shader_parameter("wipe_mask", _mask_vp.get_texture())
 	_push_drops_to_shader()
 
 	_bb = BackBufferCopy.new()
@@ -85,6 +111,10 @@ func _ready() -> void:
 	_glass.visible = false
 	_glass.draw.connect(_on_glass_draw)
 	add_child(_glass)
+
+	_air_drops_layer = Node2D.new()
+	_air_drops_layer.draw.connect(_on_air_drops_draw)
+	add_child(_air_drops_layer)
 
 
 func _on_glass_draw() -> void:
@@ -123,6 +153,11 @@ func set_wiper_transforms(lp: Vector2, lr: float, rp: Vector2, rr: float) -> voi
 func _process(delta: float) -> void:
 	if not is_raining:
 		return
+	_current_delta = delta
+	_fog_adder.queue_redraw()
+	_wiper_eraser.queue_redraw()
+	_air_drops_layer.queue_redraw()
+
 	_update_air(delta)
 	_spawn_drops(delta)
 	_update_drops(delta)
@@ -132,6 +167,33 @@ func _process(delta: float) -> void:
 	queue_redraw()
 	_glass.queue_redraw()
 
+func _on_fog_add_draw() -> void:
+	if not is_raining: return
+	# 3초 동안 완전히 하얗게(1.0) 되려면 초당 1/3.0씩 더함
+	_fog_adder.draw_rect(Rect2(0, 0, SCREEN_W, SCREEN_H), Color(1, 1, 1, _current_delta / 3.0))
+
+func _on_wiper_erase_draw() -> void:
+	if not is_raining: return
+	for w in 2:
+		var p = _wp[w]
+		var a0 = _wa_prev[w]
+		var a1 = _wa_curr[w]
+		if is_equal_approx(a0, a1):
+			continue
+		
+		# 앞뒤로 조금 여유를 둬서 부채꼴 그리기
+		var amin = minf(a0, a1) - 0.08
+		var amax = maxf(a0, a1) + 0.08
+		
+		var pts = PackedVector2Array()
+		pts.append(p)
+		
+		var steps = max(2, int((amax - amin) * 20))
+		for i in range(steps + 1):
+			var a = lerpf(amin, amax, float(i) / float(steps))
+			pts.append(p + Vector2(cos(a), sin(a)) * WIPER_REACH)
+		
+		_wiper_eraser.draw_polygon(pts, PackedColorArray([Color(1, 1, 1, 1)]))
 
 # ── 공중 빗줄기 ─────────────────────────────────────────────
 func _update_air(delta: float) -> void:
@@ -178,12 +240,16 @@ func _spawn_one() -> void:
 			_dx[i] = randf() * SCREEN_W
 			_dy[i] = randf() * SCREEN_H
 			var roll := randf()
-			if roll < 0.60:
-				_dr[i] = 1.5 + randf() * 2.5     # 작음
-			elif roll < 0.88:
-				_dr[i] = 3.8 + randf() * 3.0     # 중간
+			if roll < 0.40:
+				_dr[i] = 1.5 + randf() * 2.0     # 1단계 (가장 작은 크기, 1.5 ~ 3.5)
+			elif roll < 0.65:
+				_dr[i] = 3.0 + randf() * 1.5     # 2단계 (3.0 ~ 4.5)
+			elif roll < 0.85:
+				_dr[i] = 4.5 + randf() * 1.5     # 3단계 (4.5 ~ 6.0)
+			elif roll < 0.95:
+				_dr[i] = 6.0 + randf() * 1.5     # 4단계 (6.0 ~ 7.5)
 			else:
-				_dr[i] = 6.0 + randf() * 6.0     # 큰 — 확실히 미끄러짐
+				_dr[i] = 7.5 + randf() * 0.9     # 5단계 (가장 큰 크기, 7.5 ~ 8.4)
 			_dvy[i] = 0.0
 			_dstretch[i] = 1.0
 			return
@@ -284,17 +350,13 @@ func _merge_drops() -> void:
 func _push_drops_to_shader() -> void:
 	var data := PackedVector4Array()
 	data.resize(MAX_DROPS)
-	var active := 0
 	for i in MAX_DROPS:
 		data[i] = Vector4(_dx[i], _dy[i], _dr[i], _dstretch[i])
-		if _dr[i] > 0.01:
-			active += 1
 	_shader_mat.set_shader_parameter("drops", data)
-	_shader_mat.set_shader_parameter("wet_amount", float(active) / float(MAX_DROPS))
 
 
 # ── 공중 빗줄기만 직접 그림 ─────────────────────────────────
-func _draw() -> void:
+func _draw_air_drops(target: CanvasItem, alpha_mult: float) -> void:
 	if not is_raining:
 		return
 	var lean := deg_to_rad(AIR_LEAN_DEG)
@@ -319,15 +381,21 @@ func _draw() -> void:
 		var ey := vy / v_len if v_len > 0.0 else 1.0
 		
 		var t := clampf(y / SCREEN_H, 0.0, 1.0)
-		var a := 0.22 + t * 0.38 + (sp - 0.55) * 0.12
+		var a := (0.22 + t * 0.38 + (sp - 0.55) * 0.12) * alpha_mult
 		var ln := AIR_LEN * (0.5 + t * 0.7 + (sp - 0.55) * 0.4)
 		
 		# 속도가 빠를수록 빗줄기도 더 길어짐
 		ln *= clampf(v_len / AIR_SPEED, 1.0, 3.5)
 		
-		draw_line(
+		target.draw_line(
 			Vector2(x, y),
 			Vector2(x + ex * ln, y + ey * ln),
 			Color(0.70, 0.80, 0.95, a),
 			1.0
 		)
+
+func _draw() -> void:
+	_draw_air_drops(self, 1.0)
+
+func _on_air_drops_draw() -> void:
+	_draw_air_drops(_air_drops_layer, 0.3)
