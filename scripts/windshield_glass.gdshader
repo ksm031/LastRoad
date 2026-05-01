@@ -7,17 +7,29 @@ uniform vec2  screen_size = vec2(1280.0, 720.0);
 uniform vec4  drops[MAX_DROPS];                  // xy=pos(px), z=radius(px), w=stretch
 uniform sampler2D wipe_mask : hint_default_white; // 와이퍼로 지워진 안개 마스크
 
+// 카메라 파라미터 — 유리 효과가 카메라 줌에 따라 같이 이동하도록
+uniform vec2  cam_center_uv = vec2(0.5, 0.5);  // 카메라 위치 (0-1 UV 공간)
+uniform float cam_zoom = 1.0;
+
 void fragment() {
 	vec2 pixel = SCREEN_UV * screen_size;
+
+	// 룸미러 영역 (스크린 좌표) — 앞유리 효과 없이 원본 그대로
+	bool in_mirror = pixel.x >= 535.0 && pixel.x <= 795.0
+	              && pixel.y >= 44.0  && pixel.y <= 118.0;
+
+	// 스크린 픽셀 → 유리면 좌표 (카메라 줌 역변환)
+	vec2 glass_pixel = (pixel - screen_size * 0.5) / cam_zoom + cam_center_uv * screen_size;
+
 	vec2 total_offset = vec2(0.0);
 	float highlight    = 0.0;
-	float drop_mask    = 0.0;   // 방울 내부 누적 마스크 (틴트용)
+	float drop_mask    = 0.0;
 
 	for (int i = 0; i < MAX_DROPS; i++) {
 		vec4 d = drops[i];
 		if (d.z < 0.5) continue;
 
-		vec2 local = pixel - d.xy;
+		vec2 local = glass_pixel - d.xy;   // 유리면 좌표로 거리 계산
 		float stretch = d.w;
 		float ly = local.y / stretch;
 
@@ -44,7 +56,6 @@ void fragment() {
 		float refract_strength = sin(ang) * cos(ang);
 		total_offset -= dir_screen * refract_strength * d.z * 3.2;
 
-		// 방울 내부 마스크 (가장자리→0, 중심→1)
 		drop_mask = max(drop_mask, 1.0 - n * n);
 
 		// 스펙큘러 하이라이트
@@ -56,32 +67,36 @@ void fragment() {
 		highlight = max(highlight, hi);
 	}
 
-	vec2 refract_uv = SCREEN_UV + total_offset / screen_size;
+	// 유리면 UV (카메라 줌 보정) — wipe_mask 샘플링에 사용
+	vec2 glass_uv = (SCREEN_UV - 0.5) / cam_zoom + cam_center_uv;
 
-	// 마스크 텍스처에서 현재 픽셀의 안개 농도를 읽어옴
-	float fog_factor = texture(wipe_mask, SCREEN_UV).r;
+	// 굴절된 유리 UV → 스크린 UV로 역변환
+	vec2 refracted_glass_uv = glass_uv + total_offset / screen_size;
+	vec2 refract_uv = (refracted_glass_uv - cam_center_uv) * cam_zoom + 0.5;
 
-	// 비로 인한 시야 방해 효과 (흐림)
+	// 마스크 텍스처에서 안개 농도
+	float fog_factor = texture(wipe_mask, glass_uv).r;
 	float blur_lod = fog_factor * 2.2;
 
-	// 색수차
-	vec2  ca    = total_offset * 0.08 / screen_size;
+	// 색수차 (유리면 → 스크린 UV 스케일 보정)
+	vec2  ca    = total_offset * cam_zoom * 0.08 / screen_size;
 	float red   = textureLod(screen_texture, refract_uv + ca, blur_lod).r;
 	float green = textureLod(screen_texture, refract_uv, blur_lod).g;
 	float blue  = textureLod(screen_texture, refract_uv - ca, blur_lod).b;
 	vec3  refracted = vec3(red, green, blue);
 
-	// ── 방울 자체에만 물 색 틴트 ─────────────────────────────
+	// 방울 자체에만 물 색 틴트
 	vec3 water_color = vec3(0.72, 0.88, 1.00);
 	vec3 color = mix(refracted, refracted * water_color, drop_mask * 0.28);
 
-	// ── 전체 유리 물막/김서림 틴트 (시야 방해) ───────────────
-	// 빗방울 위에도 틴트가 덮이므로, 안개가 짙으면 빗방울도 뿌옇게 보입니다.
+	// 전체 유리 물막/김서림 틴트
 	vec3 glass_tint = vec3(0.8, 0.85, 0.9);
 	color = mix(color, glass_tint, fog_factor * 0.15);
 
 	// 스펙큘러
 	color += vec3(1.0, 0.98, 0.94) * highlight * 0.70;
 
-	COLOR = vec4(color, 1.0);
+	// 룸미러 영역은 유리 효과 없이 원본
+	vec3 raw = texture(screen_texture, SCREEN_UV).rgb;
+	COLOR = vec4(in_mirror ? raw : color, 1.0);
 }

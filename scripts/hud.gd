@@ -83,12 +83,14 @@ const RADIO_LCD_OFFSET := Vector2(63.0, 32.0)  # 라디오 패널 내부의 액�
 const RADIO_DIAL_OFFSET := Vector2(27.0, 40.0) # 라디오 패널 내부의 다이얼 오프셋
 const RADIO_FREQ_MIN  := 87.5
 const RADIO_FREQ_MAX  := 108.0
+const WIPER_SWITCH_REL_POS := Vector2(140.0, 5.0) # 핸들 중심 기준 상대 위치 (약간 오른쪽 위)
 const RADIO_FREQ_STEP := 0.5
 const RADIO_TOTAL_STEPS := 42   # (108.0 - 87.5) / 0.5 + 1
 
 var _radio_panel    : Sprite2D
 var _radio_lcd      : Sprite2D
 var _radio_dial     : Sprite2D
+var _wiper_switch   : Sprite2D
 var _radio_freq_label : Label
 var _tex_lcd_normal : Texture2D
 var _tex_lcd_death  : Texture2D
@@ -103,10 +105,12 @@ const RADIO_TUNE_DELAY := 0.15      # 0.5 스텝에 맞춘 적절한 이동 속�
 # 죽음의 주파수 구간 정의 (안전 구간 2개)
 var _safe_zones : Array = []  # [[start_step, end_step], ...]
 
+const CLICK_RADIUS := 16.0  # 커서 원의 반지름 (32x32 / 2), 관대한 클릭 판정에 사용
+
 func _ready() -> void:
-	_build_portrait_and_mirror()
 	_build_dashboard()
 	_build_wipers()
+	_build_portrait_and_mirror()
 	_build_needles()
 	_build_fuel_needle()
 	_build_wheel()
@@ -114,8 +118,127 @@ func _ready() -> void:
 	_build_labels()
 	_build_visual_overlays()
 	_build_stage_overlays()
+	_build_wiper_switch()
 	_generate_safe_zones(6)  # 스테이지 1 기준: 안전 구간 3.0MHz (6스텝)
+	_setup_cursor()
 	set_process(true)
+
+func _setup_cursor() -> void:
+	# 두께 2px 흰색 속빈 원 커서
+	var img := Image.create(32, 32, false, Image.FORMAT_RGBA8)
+	img.fill(Color(0.0, 0.0, 0.0, 0.0))
+	var center := Vector2(15.5, 15.5)
+	for y in range(32):
+		for x in range(32):
+			var dist := Vector2(x + 0.5, y + 0.5).distance_to(center)
+			if dist >= 13.0 and dist <= 15.0:
+				img.set_pixel(x, y, Color(1.0, 1.0, 1.0, 1.0))
+	var tex := ImageTexture.create_from_image(img)
+	Input.set_custom_mouse_cursor(tex, Input.CURSOR_ARROW, Vector2(15, 15))
+
+var _f_toggled      : bool = false  # 거울 줌 토글
+var _v_toggled      : bool = false  # 라디오 줌 토글
+var _is_dragging_dial : bool = false
+var _drag_start_x   : float = 0.0
+var _drag_start_step: int = 0
+
+
+var _drag_accum : float = 0.0
+
+func _input(event: InputEvent) -> void:
+	# ── 키보드 토글 ──
+	if event is InputEventKey and event.pressed and not event.echo:
+		if event.keycode == KEY_F:
+			if _f_toggled: _f_toggled = false
+			else: _v_toggled = false; _f_toggled = true
+		elif event.keycode == KEY_V:
+			if _v_toggled: _v_toggled = false
+			else: _f_toggled = false; _v_toggled = true
+		return
+			
+	# ── 마우스 버튼 ──
+	if event is InputEventMouseButton:
+		# 클릭 중에는 커서 숨김, 뗄 때 복원
+		if event.button_index == MOUSE_BUTTON_LEFT or event.button_index == MOUSE_BUTTON_RIGHT:
+			if event.pressed:
+				Input.set_mouse_mode(Input.MOUSE_MODE_HIDDEN)
+			else:
+				Input.set_mouse_mode(Input.MOUSE_MODE_VISIBLE)
+
+		if event.button_index == MOUSE_BUTTON_RIGHT and event.pressed:
+			_f_toggled = false
+			_v_toggled = false
+			_is_dragging_dial = false
+			return
+		
+		if event.button_index == MOUSE_BUTTON_LEFT:
+			if event.pressed:
+				var click_glob: Vector2 = event.global_position
+				
+				# ── A. 라디오 줌 상태일 때 ──
+				if _v_toggled:
+					# 1. 다이얼 드래그
+					if _radio_dial and _radio_dial.get_local_mouse_position().length() < 30.0 + CLICK_RADIUS:
+						_is_dragging_dial = true
+						_drag_accum = 0.0
+						return
+					# 2. 패널 클릭 (줌 해제)
+					if _radio_panel:
+						var lp := _radio_panel.get_local_mouse_position()
+						var size := _radio_panel.texture.get_size()
+						if Rect2(Vector2.ZERO, size).grow(CLICK_RADIUS).has_point(lp):
+							_v_toggled = false
+							return
+					# 라디오 상태에서는 다른 UI(룸미러 등) 클릭 원천 차단
+					return
+
+				# ── B. 룸미러 줌 상태일 때 ──
+				if _f_toggled:
+					if _mirror_clip and _mirror_clip.get_global_rect().grow(CLICK_RADIUS).has_point(click_glob):
+						_f_toggled = false
+						return
+					# 룸미러 상태에서는 라디오 클릭 차단
+					return
+
+				# ── C. 평상시 (주행 화면) ──
+				# 1. 룸미러 클릭 진입
+				if _mirror_clip and _mirror_clip.get_global_rect().grow(CLICK_RADIUS).has_point(click_glob):
+					_f_toggled = true
+					_v_toggled = false # 상호 배타적
+					return
+				
+				# 2. 라디오 패널 클릭 진입
+				if _radio_panel:
+					var lp := _radio_panel.get_local_mouse_position()
+					var size := _radio_panel.texture.get_size()
+					if Rect2(Vector2.ZERO, size).grow(CLICK_RADIUS).has_point(lp):
+						_v_toggled = true
+						_f_toggled = false # 상호 배타적
+						return
+				
+				# 3. 와이퍼 스위치
+				if _wiper_switch:
+					# 와이퍼 스위치 노드 자체의 로컬 마우스 좌표로 판정
+					var lp := _wiper_switch.get_local_mouse_position()
+					var size := _wiper_switch.texture.get_size()
+					# centered = true 이므로 영역을 -0.5만큼 오프셋
+					if Rect2(-size * 0.5, size).grow(CLICK_RADIUS).has_point(lp):
+						_wiper_state = (_wiper_state + 1) % 3
+						return
+			else:
+				_is_dragging_dial = false
+
+	# ── 마우스 드래그 (주파수 조작) ──
+	if event is InputEventMouseMotion:
+		if _is_dragging_dial and _v_toggled:
+			_drag_accum += event.relative.x
+			if absf(_drag_accum) >= 10.0:
+				var steps = int(_drag_accum / 10.0)
+				var new_step = clampi(_radio_step + steps, 0, RADIO_TOTAL_STEPS - 1)
+				if new_step != _radio_step:
+					_radio_step = new_step
+					_update_radio_display()
+				_drag_accum = fmod(_drag_accum, 10.0)
 
 func _process(delta: float) -> void:
 	if _impact_t > 0.0:
@@ -123,9 +246,8 @@ func _process(delta: float) -> void:
 	if _watcher_impact_t > 0.0:
 		_watcher_impact_t = maxf(_watcher_impact_t - delta, 0.0)
 		
-	# 포커싱 키 (F)
-	_focusing = Input.is_key_pressed(KEY_F)
-	if _focusing:
+	# 포커싱 (거울)
+	if _f_toggled:
 		_focus_t = minf(_focus_t + delta * 5.0, 1.0)
 	else:
 		_focus_t = maxf(_focus_t - delta * 5.0, 0.0)
@@ -138,32 +260,31 @@ func _process(delta: float) -> void:
 	else:
 		_z_pressed = false
 		
-	# 라디오 포커싱 키 (V) 및 주파수 조작
-	_v_pressed = Input.is_key_pressed(KEY_V)
-	if _v_pressed:
+	# 라디오 포커싱
+	if _v_toggled:
 		_radio_focus_t = minf(_radio_focus_t + delta * 5.0, 1.0)
-		
-		var dir := 0
-		if Input.is_key_pressed(KEY_LEFT) or Input.is_action_pressed("ui_left") or Input.is_key_pressed(KEY_A):
-			dir = -1
-		elif Input.is_key_pressed(KEY_RIGHT) or Input.is_action_pressed("ui_right") or Input.is_key_pressed(KEY_D):
-			dir = 1
-			
-		if dir != 0:
-			if _radio_tune_timer <= 0.0:
-				_radio_step = clampi(_radio_step + dir, 0, RADIO_TOTAL_STEPS - 1)
-				_update_radio_display()
-				_radio_tune_timer = RADIO_TUNE_DELAY
-			else:
-				_radio_tune_timer -= delta
-		else:
-			_radio_tune_timer = 0.0
 	else:
 		_radio_focus_t = maxf(_radio_focus_t - delta * 5.0, 0.0)
-		_radio_tune_timer = 0.0
 	
 	_update_wipers(delta)
 	_update_portrait_blink(delta)
+	_update_death_tint(delta)
+
+var _death_tint_t: float = 0.0  # 0: 정상, 1: 완전 붉은빛
+
+func _update_death_tint(delta: float) -> void:
+	if _dash == null: return
+	# 죽음의 주파수면 서서히 켜지고, 안전 구간이면 서서히 꺼짐
+	if _radio_on_death:
+		_death_tint_t = minf(_death_tint_t + delta * 2.0, 1.0)
+	else:
+		_death_tint_t = maxf(_death_tint_t - delta * 2.0, 0.0)
+
+	# 맥동: 0.08 진폭으로 천천히 흔들림
+	var pulse := sin(float(Time.get_ticks_msec()) * 0.002) * 0.08 + 0.92
+	var tint_strength := _death_tint_t * pulse
+	# modulate: 붉은 채널 유지, 나머지 약간 낮춤
+	_dash.modulate = Color(1.0, 1.0 - tint_strength * 0.35, 1.0 - tint_strength * 0.35)
 
 func on_rock_hit() -> void:
 	_impact_t = IMPACT_TIME
@@ -176,7 +297,11 @@ func _build_portrait_and_mirror() -> void:
 	_mirror_clip.position = MIRROR_MIN
 	_mirror_clip.size = MIRROR_MAX - MIRROR_MIN
 	_mirror_clip.clip_contents = true
-	add_child(_mirror_clip)
+	_mirror_clip.show_behind_parent = true
+	if _dash != null:
+		_dash.add_child(_mirror_clip)
+	else:
+		add_child(_mirror_clip)
 	
 	_rearview_node = RearviewRenderer.new()
 	_rearview_node.modulate = Color(0.95, 0.95, 1.0)
@@ -252,9 +377,10 @@ func _build_dashboard() -> void:
 		_dash.position = Vector2.ZERO
 		_dash.texture_filter = CanvasItem.TEXTURE_FILTER_LINEAR
 		_dash.scale = Vector2(
-			1280.0 / float(tex.get_width()),
-			720.0  / float(tex.get_height())
+			1280.0 / (float(tex.get_width()) - 200.0),
+			720.0  / (float(tex.get_height()) - 200.0)
 		)
+		_dash.offset = Vector2(-100.0, -100.0)
 	add_child(_dash)
 
 func _build_radio() -> void:
@@ -308,8 +434,20 @@ func _build_radio() -> void:
 		_radio_dial.scale = scale_inv
 		_radio_dial.texture_filter = CanvasItem.TEXTURE_FILTER_NEAREST
 	_dash.add_child(_radio_dial)
-	
 	_update_radio_display()
+
+func _build_wiper_switch() -> void:
+	if _wheel == null: return
+	
+	_wiper_switch = Sprite2D.new()
+	var tex := load("res://Asset/Image/wiper_switch.png") as Texture2D
+	if tex:
+		_wiper_switch.texture = tex
+		_wiper_switch.centered = true
+		_wiper_switch.position = WIPER_SWITCH_REL_POS
+		_wiper_switch.show_behind_parent = true # 핸들 뒤로 배치
+		_wiper_switch.texture_filter = CanvasItem.TEXTURE_FILTER_LINEAR
+	_wheel.add_child(_wiper_switch)
 
 ## 안전 구간 생성 (스테이지에 따라 폭이 달라짐)
 func _generate_safe_zones(safe_width: int) -> void:
@@ -679,7 +817,7 @@ func _update_shake(speed: float, scroll_z: float, steering_angle: float) -> void
 	if _fuel_pivot != null:
 		_fuel_pivot.position = FUEL_GAUGE_CENTER + offset
 	if _mirror_clip != null:
-		_mirror_clip.position = MIRROR_MIN + offset
+		_mirror_clip.position = MIRROR_MIN
 
 	if _portrait != null and _rearview_node != null:
 		var spd_t   := speed / SPEED_MAX

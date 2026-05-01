@@ -157,4 +157,3 @@ func _draw() -> void:
 	entries.sort_custom(func(a, b): return a.d < b.d)
 	for e in entries:
 		draw_texture_rect(e.tex, e.rect, false, Color(1.0, 1.0, 1.0, e.fade))
-

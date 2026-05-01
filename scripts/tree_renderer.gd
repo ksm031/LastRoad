@@ -105,11 +105,23 @@ func _draw() -> void:
 				# 원거리 페이드만 유지
 				var fade := 1.0 - clampf((dz - DZ_MAX * 0.75) / (DZ_MAX * 0.25), 0.0, 1.0)
 
+				var c_r := 0.32
+				var c_g := 0.38
+				var c_b := 0.26
+				if hash_val % 100 < 40:
+					var r_shift = (float(hash_val % 21) / 20.0) * 0.2 - 0.1
+					var g_shift = (float((hash_val / 21) % 21) / 20.0) * 0.2 - 0.1
+					var b_shift = (float((hash_val / 441) % 21) / 20.0) * 0.2 - 0.1
+					c_r = clampf(c_r + r_shift, 0.0, 1.0)
+					c_g = clampf(c_g + g_shift, 0.0, 1.0)
+					c_b = clampf(c_b + b_shift, 0.0, 1.0)
+
 				entries.append({
 					"d":    depth,
 					"rect": Rect2(tx - tw * 0.5, ground_y - th, tw, th),
 					"tex":  tex,
-					"fade": fade
+					"fade": fade,
+					"color": Color(c_r, c_g, c_b)
 				})
 
 	if scavenging_sys != null and scavenging_sys.has_method("get_draw_entries"):
@@ -127,4 +139,6 @@ func _draw() -> void:
 			else:
 				draw_texture_rect(e.tex, e.rect, false, Color(1, 1, 1, e.fade))
 		else:
-			draw_texture_rect(e.tex, e.rect, false, Color(0.32, 0.38, 0.26, e.fade))
+			var draw_color = e.get("color", Color(0.32, 0.38, 0.26))
+			draw_color.a = e.fade
+			draw_texture_rect(e.tex, e.rect, false, draw_color)

@@ -251,6 +251,10 @@ func _process(delta: float) -> void:
 		_hud._wiper_pivot_L.global_position, _hud._wiper_pivot_L.global_rotation,
 		_hud._wiper_pivot_R.global_position, _hud._wiper_pivot_R.global_rotation
 	)
+	# 유리 셰이더에 카메라 파라미터 전달 (와이퍼 자국이 카메라 줌과 함께 이동하도록)
+	if _rain._shader_mat:
+		_rain._shader_mat.set_shader_parameter("cam_center_uv", _camera.position / Vector2(1280.0, 720.0))
+		_rain._shader_mat.set_shader_parameter("cam_zoom", _camera.zoom.x)
 	_road.update_state(_vehicle.scroll_z, _vehicle.cam_x, curve_x, hill_px)
 	_scavenging.update_state(_vehicle.scroll_z, _vehicle.cam_x, curve_x, hill_px)
 	_trees.update_state(_vehicle.scroll_z, _vehicle.cam_x, curve_x, hill_px)

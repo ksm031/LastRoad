@@ -158,11 +158,10 @@ func handle_input(delta: float) -> void:
 	if _accel_lock > 0.0:
 		_accel_lock = maxf(_accel_lock - delta, 0.0)
 
-	var v_pressed := Input.is_key_pressed(KEY_V)
 	var w := Input.is_key_pressed(KEY_W) or Input.is_action_pressed("ui_up")
 	var s := Input.is_key_pressed(KEY_S) or Input.is_action_pressed("ui_down")
-	var a := (Input.is_key_pressed(KEY_A) or Input.is_action_pressed("ui_left")) and not v_pressed
-	var d := (Input.is_key_pressed(KEY_D) or Input.is_action_pressed("ui_right")) and not v_pressed
+	var a := Input.is_key_pressed(KEY_A) or Input.is_action_pressed("ui_left")
+	var d := Input.is_key_pressed(KEY_D) or Input.is_action_pressed("ui_right")
 
 	if _accel_lock > 0.0:
 		w = false
