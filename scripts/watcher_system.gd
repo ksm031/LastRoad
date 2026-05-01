@@ -239,20 +239,28 @@ func _update_sprites() -> void:
 			tex_to_use = _down_textures[frame]
 		
 		var h := depth * WATCHER_BASE_H
+		var hit_y_offset := 0.0
+		if _is_hit_active(k):
+			h *= 1.5
+			var hit_time = float(_hit_info[k]["hit_time"])
+			var elapsed = _anim_time - hit_time
+			hit_y_offset = minf(elapsed * 45.0, 15.0)
+
 		var w := h * float(tex_to_use.get_width()) / maxf(float(tex_to_use.get_height()), 1.0)
 		var fade := 1.0 - clampf((dz - VISIBLE_DZ_MAX * 0.75) / (VISIBLE_DZ_MAX * 0.25), 0.0, 1.0)
 		var light_h := _z_to_light_height(depth)
-		
+
 		entries.append({
 			"depth": depth,
 			"x": x,
-			"y": ground_y,
+			"y": ground_y + hit_y_offset,
 			"w": w,
 			"h": h,
 			"fade": fade,
 			"light_h": light_h,
 			"tex": tex_to_use
 		})
+
 	
 	entries.sort_custom(func(a, b): return a.depth < b.depth)
 	

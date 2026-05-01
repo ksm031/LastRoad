@@ -19,7 +19,17 @@ var _rain    : Node2D
 var _obstacles: LastRoadObstacles
 var _scavenging: LastRoadScavenging
 var _watchers : LastRoadWatchers
+var _jumpers  : LastRoadJumpers
 var _camera   : Camera2D
+
+# ── 점퍼 보닛 탑승 상태 ──────────────────────────────────────
+var _jumper_on_hood       : bool  = false
+var _jumper_escape_gauge  : float = 0.0
+const JUMPER_ESCAPE_TARGET    := 240.0
+const JUMPER_ESCAPE_FILL_RATE := 40.0  # (조향 변화/최대조향) × 속도계수 × 이 값
+
+
+var _prev_steering : float = 0.0
 
 var _monster_distance: float = 60.0  # 초기 괴물 간격 (세계 단위)
 var _sanity_ratio: float = 1.0        # 정신력 (1.0 = 정상, 0.0 = 패닉)
@@ -62,6 +72,7 @@ const _ObstacleScript = preload("res://scripts/obstacle_system.gd")
 const _RainScript    = preload("res://scripts/rain_renderer.gd")
 const _WatcherScript = preload("res://scripts/watcher_system.gd")
 const _ScavengingScript = preload("res://scripts/scavenging_system.gd")
+const _JumperScript  = preload("res://scripts/jumper_system.gd")
 
 var _mtn_base_y: float = 0.0
 var _sky_base_y: float = 0.0
@@ -85,6 +96,9 @@ func _ready() -> void:
 	_trees.scavenging_sys = _scavenging
 	add_child(_trees)
 	_watchers = _WatcherScript.new(); add_child(_watchers)
+	_jumpers  = _JumperScript.new()
+	_jumpers.jumper_boarded.connect(_on_jumper_boarded)
+	add_child(_jumpers)
 	_obstacles = _ObstacleScript.new(); add_child(_obstacles)
 	_vehicle = _VehicleScript.new(); add_child(_vehicle)
 	# rain은 화면 고정이어야 하므로 CanvasLayer에 올려 카메라 줌/패럴랙스 영향 차단
@@ -241,11 +255,17 @@ func _process(delta: float) -> void:
 		var target_camera_pos: Vector2 = _hud.RADIO_PANEL_POS + Vector2(100.0, 36.0)
 		_camera.zoom = Vector2(1.0, 1.0).lerp(Vector2(2.5, 2.5), radio_ease_t)
 		_camera.position = screen_center.lerp(target_camera_pos, radio_ease_t)
+	elif _hud._dash_focus_t > 0.0:
+		var dash_ease_t := smoothstep(0.0, 1.0, _hud._dash_focus_t)
+		var target_camera_pos := Vector2(300.0, 570.0)
+		_camera.zoom = Vector2(1.0, 1.0).lerp(Vector2(2.4, 2.4), dash_ease_t)
+		_camera.position = screen_center.lerp(target_camera_pos, dash_ease_t)
 	else:
 		var ease_t := smoothstep(0.0, 1.0, _hud._focus_t)
 		var target_camera_pos := Vector2(665.0, 120.0) 
 		_camera.zoom = Vector2(1.0, 1.0).lerp(Vector2(2.2, 2.2), ease_t)
 		_camera.position = screen_center.lerp(target_camera_pos, ease_t)
+
 	
 	_rain.set_wiper_transforms(
 		_hud._wiper_pivot_L.global_position, _hud._wiper_pivot_L.global_rotation,
@@ -260,6 +280,8 @@ func _process(delta: float) -> void:
 	_trees.update_state(_vehicle.scroll_z, _vehicle.cam_x, curve_x, hill_px)
 	_obstacles.update_state(_vehicle.scroll_z, _vehicle.cam_x, curve_x, hill_px)
 	_watchers.update_state(_vehicle.scroll_z, _vehicle.cam_x, curve_x, hill_px)
+	_jumpers.update_state(_vehicle.scroll_z, _vehicle.cam_x, curve_x, hill_px)
+
 	if _obstacles.check_collision(_vehicle):
 		_hud.on_rock_hit()
 	if _watchers.check_collision(_vehicle):
@@ -268,6 +290,38 @@ func _process(delta: float) -> void:
 		_sanity_ratio -= 0.10  # 정신력 10% 감소
 		_sanity_ratio = clampf(_sanity_ratio, 0.0, 1.0)
 		_hud.on_watcher_hit()
+	if _jumpers.check_collision(_vehicle):
+		if _jumper_on_hood:
+			# 이미 탑승 중일 때 추가 점퍼 충돌 → 공통 충돌 효과 적용
+			_vehicle.apply_watcher_hit()
+			_sanity_ratio -= 0.10
+			_sanity_ratio = clampf(_sanity_ratio, 0.0, 1.0)
+			_hud.on_watcher_hit()
+		# 탑승 중이 아닐 때는 점프 애니메이션 진행 후 jumper_boarded 신호로 처리
+
+	# ── 보닛 위 점퍼 처리 ──
+	if _jumper_on_hood:
+		# 정신력 -1/초
+		_sanity_ratio -= 0.01 * delta
+		_sanity_ratio = clampf(_sanity_ratio, 0.0, 1.0)
+
+		# 탈출 게이지: 조향 변화 강도 × 속도 계수
+		var steering_delta: float = absf(_vehicle.steering_angle - _prev_steering)
+		var steering_velocity: float = steering_delta / maxf(delta, 0.001)
+		var speed_coeff: float = _vehicle.speed / 240.0
+		var fill: float = (steering_velocity / 35.0) * speed_coeff * JUMPER_ESCAPE_FILL_RATE
+		_jumper_escape_gauge = minf(_jumper_escape_gauge + fill * delta, JUMPER_ESCAPE_TARGET)
+		_hud.update_escape_gauge(_jumper_escape_gauge / JUMPER_ESCAPE_TARGET)
+		_hud.sway_jumper(_vehicle.steering_angle)
+
+		if _jumper_escape_gauge >= JUMPER_ESCAPE_TARGET:
+			_jumper_on_hood = false
+			_jumper_escape_gauge = 0.0
+			_hud.set_jumper_on_hood(false)
+
+	_prev_steering = _vehicle.steering_angle
+
+
 
 # ── 다음 스테이지로 진행 ────────────────────────────────────
 func _advance_to_next_stage() -> void:
@@ -307,6 +361,13 @@ func _update_backdrops(delta: float) -> void:
 	if _mtn_a != null:
 		_apply_pair_scroll(_mtn_a, _mtn_b, _mtn_scroll, _mtn_tile_w)
 
+
+func _on_jumper_boarded() -> void:
+	if _jumper_on_hood:
+		return  # 이미 탑승 중 → 무시 (check_collision에서 이미 처리)
+	_jumper_on_hood = true
+	_jumper_escape_gauge = 0.0
+	_hud.set_jumper_on_hood(true)
 
 func _update_backdrops_vertical(delta: float, hill_px: float) -> void:
 	# 언덕 시 “올라가는 느낌”은 배경의 아주 약한 상하 시차로만 준다.

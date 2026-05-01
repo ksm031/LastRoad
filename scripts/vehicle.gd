@@ -73,7 +73,7 @@ const SHIFT_LOCKOUT     := 0.35
 const SHIFT_RPM_DROP    := 400.0    # 업시프트 시 RPM 살짝 떨어짐
 const SHIFT_RPM_BLIP    := 350.0    # 다운시프트 시 RPM 살짝 올라감
 
-const GEAR_RATIO  := [200.0, 100.0, 65.0, 48.0, 38.0, 32.0]
+const GEAR_RATIO: Array[float] = [200.0, 100.0, 65.0, 48.0, 38.0, 32.0]
 
 # ── 상태 ─────────────────────────────────────────────────────
 var speed          : float = 0.0
@@ -256,15 +256,15 @@ func update_rpm(delta: float) -> void:
 		var shift_up_rpm := SHIFT_UP_THROTTLE if w_pressed else SHIFT_UP_COAST
 		if rpm > shift_up_rpm and gear < GEAR_RATIO.size() - 1:
 			# 다음 기어에서 RPM이 idle 밑으로 떨어지지 않을 때만 변속
-			var rpm_after_up := speed * GEAR_RATIO[gear + 1]
+			var rpm_after_up: float = speed * GEAR_RATIO[gear + 1]
 			if rpm_after_up > IDLE_RPM:
 				gear += 1
 				rpm = maxf(rpm - SHIFT_RPM_DROP, IDLE_RPM)
 				_shift_lockout = SHIFT_LOCKOUT
 		# 다운시프트: 일반 / 킥다운 / 엔진브레이크
 		elif gear > 0:
-			var rpm_at_current := speed * GEAR_RATIO[gear]
-			var rpm_after_down := speed * GEAR_RATIO[gear - 1]
+			var rpm_at_current: float = speed * GEAR_RATIO[gear]
+			var rpm_after_down: float = speed * GEAR_RATIO[gear - 1]
 			var should_downshift := false
 
 			if rpm_at_current < SHIFT_DOWN_NORMAL:

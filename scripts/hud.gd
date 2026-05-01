@@ -77,6 +77,15 @@ var _next_blink_time: float = 0.0
 var _gameover_overlay : ColorRect
 var _center_label     : Label
 
+# ── 점퍼 보닛 오버레이 ────────────────────────────────────────
+var _jumper_hood_overlay : Sprite2D
+var _escape_gauge_bg     : ColorRect
+var _escape_gauge_fill   : ColorRect
+const ESCAPE_GAUGE_W     := 300.0
+const ESCAPE_GAUGE_H     := 10.0
+var _jumper_impact_t     : float = 0.0
+const JUMPER_IMPACT_TIME := 0.45
+
 # ── 라디오 시스템 ─────────────────────────────────────────
 const RADIO_PANEL_POS := Vector2(548.0, 570.0) # 라디오 전체 위치 미세조정용 변수
 const RADIO_LCD_OFFSET := Vector2(63.0, 32.0)  # 라디오 패널 내부의 액정(LCD) 오프셋
@@ -108,6 +117,7 @@ var _safe_zones : Array = []  # [[start_step, end_step], ...]
 const CLICK_RADIUS := 16.0  # 커서 원의 반지름 (32x32 / 2), 관대한 클릭 판정에 사용
 
 func _ready() -> void:
+	_build_jumper_overlay()  # dashboard보다 먼저 추가 → 대시보드 뒤에 렌더
 	_build_dashboard()
 	_build_wipers()
 	_build_portrait_and_mirror()
@@ -138,9 +148,13 @@ func _setup_cursor() -> void:
 
 var _f_toggled      : bool = false  # 거울 줌 토글
 var _v_toggled      : bool = false  # 라디오 줌 토글
+var _d_toggled      : bool = false  # 계기판 줌 토글
+var _dash_focus_t   : float = 0.0   # 계기판 줌을 위한 보간 변수 (0~1)
 var _is_dragging_dial : bool = false
 var _drag_start_x   : float = 0.0
 var _drag_start_step: int = 0
+const DASH_GAUGES_RECT := Rect2(90.0, 470.0, 420.0, 190.0)
+
 
 
 var _drag_accum : float = 0.0
@@ -168,6 +182,7 @@ func _input(event: InputEvent) -> void:
 		if event.button_index == MOUSE_BUTTON_RIGHT and event.pressed:
 			_f_toggled = false
 			_v_toggled = false
+			_d_toggled = false
 			_is_dragging_dial = false
 			return
 		
@@ -200,11 +215,19 @@ func _input(event: InputEvent) -> void:
 					# 룸미러 상태에서는 라디오 클릭 차단
 					return
 
-				# ── C. 평상시 (주행 화면) ──
+				# ── C. 계기판 줌 상태일 때 ──
+				if _d_toggled:
+					if DASH_GAUGES_RECT.grow(CLICK_RADIUS).has_point(click_glob):
+						_d_toggled = false
+						return
+					return
+
+				# ── D. 평상시 (주행 화면) ──
 				# 1. 룸미러 클릭 진입
 				if _mirror_clip and _mirror_clip.get_global_rect().grow(CLICK_RADIUS).has_point(click_glob):
 					_f_toggled = true
 					_v_toggled = false # 상호 배타적
+					_d_toggled = false
 					return
 				
 				# 2. 라디오 패널 클릭 진입
@@ -214,9 +237,17 @@ func _input(event: InputEvent) -> void:
 					if Rect2(Vector2.ZERO, size).grow(CLICK_RADIUS).has_point(lp):
 						_v_toggled = true
 						_f_toggled = false # 상호 배타적
+						_d_toggled = false
 						return
 				
-				# 3. 와이퍼 스위치
+				# 3. 계기판 클릭 진입
+				if DASH_GAUGES_RECT.grow(CLICK_RADIUS).has_point(click_glob):
+					_d_toggled = true
+					_f_toggled = false
+					_v_toggled = false
+					return
+
+				# 4. 와이퍼 스위치
 				if _wiper_switch:
 					# 와이퍼 스위치 노드 자체의 로컬 마우스 좌표로 판정
 					var lp := _wiper_switch.get_local_mouse_position()
@@ -227,6 +258,7 @@ func _input(event: InputEvent) -> void:
 						return
 			else:
 				_is_dragging_dial = false
+
 
 	# ── 마우스 드래그 (주파수 조작) ──
 	if event is InputEventMouseMotion:
@@ -245,6 +277,9 @@ func _process(delta: float) -> void:
 		_impact_t = maxf(_impact_t - delta, 0.0)
 	if _watcher_impact_t > 0.0:
 		_watcher_impact_t = maxf(_watcher_impact_t - delta, 0.0)
+	if _jumper_impact_t > 0.0:
+		_jumper_impact_t = maxf(_jumper_impact_t - delta, 0.0)
+
 		
 	# 포커싱 (거울)
 	if _f_toggled:
@@ -265,8 +300,46 @@ func _process(delta: float) -> void:
 		_radio_focus_t = minf(_radio_focus_t + delta * 5.0, 1.0)
 	else:
 		_radio_focus_t = maxf(_radio_focus_t - delta * 5.0, 0.0)
-	
+
+	# 계기판 포커싱
+	if _d_toggled:
+		_dash_focus_t = minf(_dash_focus_t + delta * 5.0, 1.0)
+	else:
+		_dash_focus_t = maxf(_dash_focus_t - delta * 5.0, 0.0)
+
+	if _wheel != null:
+		var ease_dash := smoothstep(0.0, 1.0, _dash_focus_t)
+		_wheel.modulate.a = 1.0 - ease_dash
+
+	if _jumper_hood_overlay != null and _jumper_hood_overlay.visible:
+		if _jumper_sliding_down:
+			_jumper_slide_time -= delta
+			var t := clampf(1.0 - (_jumper_slide_time / 0.4), 0.0, 1.0)
+			# Slide down
+			var y_offset := lerpf(0.0, 500.0, t)
+			_jumper_hood_overlay.position = Vector2(640.0 + _jumper_current_sway, 240.0 + y_offset)
+			_jumper_hood_overlay.modulate = Color(0.42, 0.42, 0.42, 1.0 - t)
+			if _jumper_slide_time <= 0.0:
+				_jumper_hood_overlay.visible = false
+				_jumper_sliding_down = false
+				_watcher_impact_t = WATCHER_IMPACT_TIME
+		else:
+			_jumper_hood_overlay.scale = Vector2(_jumper_base_sc, _jumper_base_sc)
+			_jumper_hood_overlay.modulate = Color(0.42, 0.42, 0.42, 1.0)
+
+
+			# 관성을 이용한 좌우 흔들림 및 회전 적용
+			_jumper_current_sway = lerpf(_jumper_current_sway, _jumper_target_sway, clampf(delta * 4.5, 0.0, 1.0))
+			_jumper_hood_overlay.position = Vector2(640.0 + _jumper_current_sway, 240.0)
+			_jumper_hood_overlay.rotation = lerpf(_jumper_hood_overlay.rotation, deg_to_rad(_jumper_current_sway * 0.05), clampf(delta * 4.5, 0.0, 1.0))
+	else:
+		_jumper_target_sway = 0.0
+		_jumper_current_sway = 0.0
+		if _jumper_hood_overlay != null:
+			_jumper_hood_overlay.rotation = 0.0
+
 	_update_wipers(delta)
+
 	_update_portrait_blink(delta)
 	_update_death_tint(delta)
 
@@ -601,6 +674,87 @@ func _build_stage_overlays() -> void:
 	_center_label.visible = false
 	add_child(_center_label)
 
+var _jumper_base_sc : float = 1.0
+var _jumper_hood_time : float = 0.0
+
+## 점퍼 보닛 오버레이 생성 (dashboard보다 먼저 _ready에서 호출)
+func _build_jumper_overlay() -> void:
+	# 보닛 위 점퍼 스프라이트 (도로 뷰 하단 중앙)
+	_jumper_hood_overlay = Sprite2D.new()
+	var tex := load("res://Asset/Image/Character/jumper_hold_01.png") as Texture2D
+	if tex:
+		_jumper_hood_overlay.texture = tex
+		_jumper_hood_overlay.centered = true
+		_jumper_hood_overlay.texture_filter = CanvasItem.TEXTURE_FILTER_NEAREST
+		# 세로 기준으로 스케일 설정 (화면에 크게)
+		var target_h := 1350.0
+		var sc := target_h / float(tex.get_height())
+		_jumper_base_sc = sc
+		_jumper_hood_overlay.scale = Vector2(sc, sc)
+	_jumper_hood_overlay.position = Vector2(640.0, 240.0)
+	_jumper_hood_overlay.visible = false
+	add_child(_jumper_hood_overlay)
+
+
+
+
+	# 탈출 게이지 배경
+	_escape_gauge_bg = ColorRect.new()
+	_escape_gauge_bg.color = Color(0.1, 0.1, 0.1, 0.7)
+	_escape_gauge_bg.size = Vector2(ESCAPE_GAUGE_W, ESCAPE_GAUGE_H)
+	_escape_gauge_bg.position = Vector2(640.0 - ESCAPE_GAUGE_W * 0.5, 310.0)
+	_escape_gauge_bg.visible = false
+	add_child(_escape_gauge_bg)
+
+	# 탈출 게이지 채우기
+	_escape_gauge_fill = ColorRect.new()
+	_escape_gauge_fill.color = Color(0.9, 0.7, 0.1, 0.9)
+	_escape_gauge_fill.size = Vector2(0.0, ESCAPE_GAUGE_H)
+	_escape_gauge_fill.position = Vector2(640.0 - ESCAPE_GAUGE_W * 0.5, 310.0)
+	_escape_gauge_fill.visible = false
+	add_child(_escape_gauge_fill)
+
+var _jumper_target_sway : float = 0.0
+var _jumper_current_sway : float = 0.0
+
+func sway_jumper(angle: float) -> void:
+	_jumper_target_sway = angle * -2.4
+
+var _jumper_sliding_down: bool = false
+var _jumper_slide_time: float = 0.0
+
+## 보닛 위 점퍼 표시/숨김
+func set_jumper_on_hood(on: bool) -> void:
+	if _jumper_hood_overlay:
+		if on:
+			_jumper_hood_overlay.visible = true
+			_jumper_hood_time = 0.0
+			_jumper_sliding_down = false
+			_jumper_slide_time = 0.0
+			_jumper_hood_overlay.modulate = Color(0.42, 0.42, 0.42, 1.0)
+			_jumper_impact_t = JUMPER_IMPACT_TIME
+		else:
+			if _jumper_hood_overlay.visible and not _jumper_sliding_down:
+				_jumper_sliding_down = true
+				_jumper_slide_time = 0.4
+			else:
+				_jumper_hood_overlay.visible = false
+				_jumper_sliding_down = false
+
+	if _escape_gauge_bg:
+		_escape_gauge_bg.visible = on
+	if _escape_gauge_fill:
+		_escape_gauge_fill.visible = on
+	if not on and _escape_gauge_fill:
+		_escape_gauge_fill.size.x = 0.0
+
+
+
+## 탈출 게이지 진행률 갱신 (0.0 ~ 1.0)
+func update_escape_gauge(ratio: float) -> void:
+	if _escape_gauge_fill:
+		_escape_gauge_fill.size.x = ESCAPE_GAUGE_W * clampf(ratio, 0.0, 1.0)
+
 ## 게임오버 표시
 func show_gameover() -> void:
 	_gameover_overlay.visible = true
@@ -763,8 +917,9 @@ func _update_portrait_blink(delta: float) -> void:
 
 func _update_shake(speed: float, scroll_z: float, steering_angle: float) -> void:
 	# 포커싱 중일 때 쉐이킹 감쇠
-	var ease_t := smoothstep(0.0, 1.0, _focus_t)
+	var ease_t := maxf(maxf(smoothstep(0.0, 1.0, _focus_t), smoothstep(0.0, 1.0, _radio_focus_t)), smoothstep(0.0, 1.0, _dash_focus_t))
 	var shake_mult := 1.0 - ease_t
+
 	
 	var bounce := sin(scroll_z * 15.0) * (speed / SPEED_MAX) * 1.2 * shake_mult
 	var sway   := -(steering_angle / 35.0) * 2.5 * shake_mult
@@ -784,7 +939,14 @@ func _update_shake(speed: float, scroll_z: float, steering_angle: float) -> void
 		var bounce_y := sin(t * PI) * 35.0  # 위로 35px 솟구침
 		var shake_y  := sin(t * 30.0) * 10.0 * kick # 거친 덜덜거림
 		offset += Vector2(0.0, -bounce_y + shake_y) * shake_mult
-	
+
+	if _jumper_impact_t > 0.0:
+		# 점퍼 착지: 차가 아래로 쿵 내려앉았다가 위로 퉁 솟구치는 느낌 (아래에서 위로)
+		var t := _jumper_impact_t / JUMPER_IMPACT_TIME
+		var jiggle := sin((1.0 - t) * PI * 2.0) * 55.0 * t
+		offset += Vector2(0.0, jiggle) * shake_mult
+
+
 	if _dash != null:
 		_dash.position    = offset
 		
