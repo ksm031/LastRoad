@@ -57,8 +57,22 @@ const HILL_SEG_LEN := 85.0   # 세계 z 기준 한 덩어리 길이(작을수록
 # ── RPM / 기어 파라미터 ───────────────────────────────────────
 const IDLE_RPM    := 800.0
 const REDLINE_RPM := 7200.0
-const SHIFT_UP    := 6500.0
-const SHIFT_DOWN  := 1500.0
+
+# 스로틀 위치별 변속 RPM (현실 자동변속기 동작)
+# - 가속 중(W 눌림): 높은 RPM까지 끌어올린 뒤 변속 (가속력 확보)
+# - 코스팅(W 안 눌림): 낮은 RPM에서 일찍 업시프트 (연비/조용한 주행)
+const SHIFT_UP_THROTTLE := 6300.0
+const SHIFT_UP_COAST    := 2200.0
+const SHIFT_DOWN_NORMAL := 1200.0   # 평상시 다운시프트
+const SHIFT_DOWN_KICKDN := 4200.0   # W + 저RPM → 토크 확보용 강제 다운시프트
+const SHIFT_DOWN_BRAKE  := 2600.0   # S 눌렀을 때 엔진 브레이크용 다운시프트
+
+# 변속 후 잠금 시간 — 기어 헌팅 방지
+const SHIFT_LOCKOUT     := 0.35
+# 변속 순간 RPM 흔들림 — 실제 변속감
+const SHIFT_RPM_DROP    := 400.0    # 업시프트 시 RPM 살짝 떨어짐
+const SHIFT_RPM_BLIP    := 350.0    # 다운시프트 시 RPM 살짝 올라감
+
 const GEAR_RATIO  := [200.0, 100.0, 65.0, 48.0, 38.0, 32.0]
 
 # ── 상태 ─────────────────────────────────────────────────────
@@ -69,6 +83,7 @@ var steering_angle : float = 0.0
 var rpm            : float = 800.0
 var gear           : int   = 0
 var _player_steer_offset : float = 0.0
+var _shift_lockout       : float = 0.0
 
 # ── 연료 상태 ────────────────────────────────────────────────
 var fuel           : float = FUEL_MAX  # 현재 연료 (L)
@@ -225,15 +240,50 @@ func _get_effective_max_speed() -> float:
 	return FUEL_EMPTY_MAX_SPD
 
 func update_rpm(delta: float) -> void:
+	_shift_lockout = maxf(_shift_lockout - delta, 0.0)
+
+	# 정차 상태: 1단 + 아이들 RPM
 	if speed < 1.0:
 		gear = 0
 		rpm = move_toward(rpm, IDLE_RPM, 3000.0 * delta)
 		return
-	if rpm > SHIFT_UP and gear < GEAR_RATIO.size() - 1:
-		gear += 1
-	elif gear > 0 and speed * GEAR_RATIO[gear] < SHIFT_DOWN:
-		gear -= 1
-	var target_rpm := maxf(speed * GEAR_RATIO[gear], IDLE_RPM)
+
+	var w_pressed := Input.is_key_pressed(KEY_W) or Input.is_action_pressed("ui_up")
+	var s_pressed := Input.is_key_pressed(KEY_S) or Input.is_action_pressed("ui_down")
+
+	if _shift_lockout <= 0.0:
+		# 업시프트: 스로틀 위치에 따라 변속 RPM 다름
+		var shift_up_rpm := SHIFT_UP_THROTTLE if w_pressed else SHIFT_UP_COAST
+		if rpm > shift_up_rpm and gear < GEAR_RATIO.size() - 1:
+			# 다음 기어에서 RPM이 idle 밑으로 떨어지지 않을 때만 변속
+			var rpm_after_up := speed * GEAR_RATIO[gear + 1]
+			if rpm_after_up > IDLE_RPM:
+				gear += 1
+				rpm = maxf(rpm - SHIFT_RPM_DROP, IDLE_RPM)
+				_shift_lockout = SHIFT_LOCKOUT
+		# 다운시프트: 일반 / 킥다운 / 엔진브레이크
+		elif gear > 0:
+			var rpm_at_current := speed * GEAR_RATIO[gear]
+			var rpm_after_down := speed * GEAR_RATIO[gear - 1]
+			var should_downshift := false
+
+			if rpm_at_current < SHIFT_DOWN_NORMAL:
+				# 평상시 다운시프트 (속도 너무 낮음)
+				should_downshift = true
+			elif w_pressed and rpm_at_current < SHIFT_DOWN_KICKDN and rpm_after_down < REDLINE_RPM:
+				# 킥다운: 가속 요청 + 낮은 RPM = 토크 확보를 위한 다운시프트
+				should_downshift = true
+			elif s_pressed and rpm_at_current < SHIFT_DOWN_BRAKE and rpm_after_down < REDLINE_RPM:
+				# 엔진 브레이크: 감속 중 다운시프트로 엔진 회전저항 활용
+				should_downshift = true
+
+			if should_downshift:
+				gear -= 1
+				rpm = minf(rpm + SHIFT_RPM_BLIP, REDLINE_RPM)
+				_shift_lockout = SHIFT_LOCKOUT
+
+	# 목표 RPM = 속도 * 기어비, 단 아이들 ~ 레드라인 사이로 클램프
+	var target_rpm := clampf(speed * GEAR_RATIO[gear], IDLE_RPM, REDLINE_RPM)
 	rpm = move_toward(rpm, target_rpm, 2500.0 * delta)
 
 
