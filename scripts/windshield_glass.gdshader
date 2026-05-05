@@ -1,6 +1,6 @@
 shader_type canvas_item;
 
-const int MAX_DROPS = 350;
+const int MAX_DROPS = 120;
 
 uniform sampler2D screen_texture : hint_screen_texture, repeat_disable, filter_linear_mipmap;
 uniform vec2  screen_size = vec2(1280.0, 720.0);

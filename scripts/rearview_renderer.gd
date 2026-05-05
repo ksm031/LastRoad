@@ -11,7 +11,9 @@ const ROAD_HW_MAX      := 650.0
 const ROAD_BOTTOM_Y    := 500.0
 const CAMERA_DEPTH     := 0.84
 const STRIPE_INTERVAL  := 1.2
-const NUM_STRIPS       := 300
+const NUM_STRIPS_LOW   := 80
+const NUM_STRIPS_HIGH  := 200
+var _active_strips     : int = 80
 
 # --- Colors ---
 const COL_GRASS_A   := Color(0.022, 0.032, 0.012, 1.0)
@@ -55,9 +57,10 @@ func _ready() -> void:
 		_wendigo.texture_filter = CanvasItem.TEXTURE_FILTER_LINEAR
 	add_child(_wendigo)
 
-func update_state(p_scroll_z: float, monster_dist: float, delta: float) -> void:
+func update_state(p_scroll_z: float, monster_dist: float, delta: float, zoomed: bool = false) -> void:
 	scroll_z = p_scroll_z
 	_monster_distance = monster_dist
+	_active_strips = NUM_STRIPS_HIGH if zoomed else NUM_STRIPS_LOW
 	
 	_anim_time += delta * 15.0 # 15 FPS 애니메이션
 	if _wendigo.texture:
@@ -92,9 +95,9 @@ func _draw() -> void:
 	draw_rect(Rect2(0.0, 0.0, SCREEN_W, hy), COL_SKY)
 	draw_rect(Rect2(0.0, hy, SCREEN_W, SCREEN_H - hy), COL_GRASS_A)
 
-	for i in range(NUM_STRIPS):
-		var t      := float(i)     / float(NUM_STRIPS)
-		var t_next := float(i + 1) / float(NUM_STRIPS)
+	for i in range(_active_strips):
+		var t      := float(i)     / float(_active_strips)
+		var t_next := float(i + 1) / float(_active_strips)
 
 		var y_bot  := lerpf(SCREEN_H, hy, t)
 		var y_top  := lerpf(SCREEN_H, hy, t_next)

@@ -4,14 +4,14 @@ const SCREEN_W := 1280.0
 const SCREEN_H := 720.0
 
 # ── 공중 빗줄기 (차창 밖 비) ────────────────────────────────
-const N_AIR_DROPS   := 420
+const N_AIR_DROPS   := 250
 const AIR_SPEED     := 720.0
 const AIR_LEAN_DEG  := 12.0
 const AIR_LEN       := 22.0
 
 # ── 유리 물방울 풀 ──────────────────────────────────────────
-const MAX_DROPS        := 350
-const SPAWN_RATE       := 220.0   # drops/sec
+const MAX_DROPS        := 120
+const SPAWN_RATE       := 140.0   # drops/sec (풀 축소에 맞춰 조정)
 const SLIDE_THRESHOLD  := 2.5     # 이 반지름(px) 이상이면 미끄러짐
 const SLIDE_ACCEL_K    := 45.0    # 가속도 계수
 const MAX_STRETCH      := 3.0
@@ -44,6 +44,7 @@ var _wa_curr : Array[float]   = [0.0, 0.0]
 
 # 스폰 누적
 var _spawn_acc : float = 0.0
+var _merge_frame : int = 0
 
 # 셰이더 오버레이
 var _shader_mat : ShaderMaterial
@@ -162,15 +163,18 @@ func _process(delta: float) -> void:
 	_spawn_drops(delta)
 	_update_drops(delta)
 	_wipe_drops()
-	_merge_drops()
+	_merge_frame += 1
+	if _merge_frame >= 3:
+		_merge_frame = 0
+		_merge_drops()
 	_push_drops_to_shader()
 	queue_redraw()
 	_glass.queue_redraw()
 
 func _on_fog_add_draw() -> void:
 	if not is_raining: return
-	# 3초 동안 완전히 하얗게(1.0) 되려면 초당 1/3.0씩 더함
-	_fog_adder.draw_rect(Rect2(0, 0, SCREEN_W, SCREEN_H), Color(1, 1, 1, _current_delta / 3.0))
+	# 2.0초 동안 완전히 하얗게(1.0) 되려면 초당 1/2.0씩 더함
+	_fog_adder.draw_rect(Rect2(0, 0, SCREEN_W, SCREEN_H), Color(1, 1, 1, _current_delta / 2.0))
 
 func _on_wiper_erase_draw() -> void:
 	if not is_raining: return
@@ -347,12 +351,18 @@ func _merge_drops() -> void:
 				break  # i는 한 프레임에 한 번만 병합
 
 
-# ── 셰이더 유니폼 갱신 ──────────────────────────────────────
+# ── 셰이더 유니폼 갱신 (활성 물방울만 패킹) ──────────────────
 func _push_drops_to_shader() -> void:
 	var data := PackedVector4Array()
 	data.resize(MAX_DROPS)
+	var idx := 0
 	for i in MAX_DROPS:
-		data[i] = Vector4(_dx[i], _dy[i], _dr[i], _dstretch[i])
+		if _dr[i] >= 0.5:
+			data[idx] = Vector4(_dx[i], _dy[i], _dr[i], _dstretch[i])
+			idx += 1
+	# 나머지 비활성 슬롯을 0으로 채움
+	for j in range(idx, MAX_DROPS):
+		data[j] = Vector4(0.0, 0.0, 0.0, 1.0)
 	_shader_mat.set_shader_parameter("drops", data)
 
 

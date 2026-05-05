@@ -15,7 +15,7 @@ const CAMERA_DEPTH     := 0.84
 # STRIPE_INTERVAL : 한 줄무늬 쌍의 세계 단위 길이
 const STRIPE_INTERVAL  := 1.2
 # NUM_STRIPS : 도로를 몇 개의 수평 띠로 나눌지
-const NUM_STRIPS       := 200
+const NUM_STRIPS       := 400
 
 # --- Colors (GDD 팔레트 기반) ---
 const COL_SKY_FILL  := Color(0.039, 0.039, 0.078, 1.0)   # #0A0A14 (sky 이미지 없을 때 폴백)

@@ -6,7 +6,7 @@ const _Road = preload("res://scripts/road_renderer.gd")
 # ── 차량 파라미터 ────────────────────────────────────────────
 const MAX_SPEED     := 240.0   # km/h
 const ACCEL         := 11.0    # km/h/s  (제로백 ~9초, 일반 승용차 수준)
-const BRAKE_FORCE   := 35.0    # km/h/s  (100→0 약 2.9초, 일반 차량 기준)
+const BRAKE_FORCE   := 70.0    # km/h/s  (100→0 약 1.4초, 향상된 브레이크)
 const DRAG          := 5.0     # 자연 감속 (엔진 브레이크 수준)
 const LATERAL_SPEED := 2.5     # cam_x(차선) 단위/초
 

@@ -21,6 +21,9 @@ var _scavenging: LastRoadScavenging
 var _watchers : LastRoadWatchers
 var _jumpers  : LastRoadJumpers
 var _camera   : Camera2D
+var _inv_mgr  : InventoryManager
+var _loot_ui  : LootUI
+var _active_wreck_seed: int = -1
 
 # ── 점퍼 보닛 탑승 상태 ──────────────────────────────────────
 var _jumper_on_hood       : bool  = false
@@ -73,11 +76,21 @@ const _RainScript    = preload("res://scripts/rain_renderer.gd")
 const _WatcherScript = preload("res://scripts/watcher_system.gd")
 const _ScavengingScript = preload("res://scripts/scavenging_system.gd")
 const _JumperScript  = preload("res://scripts/jumper_system.gd")
+const _InvMgrScript  = preload("res://scripts/inventory_manager.gd")
+const _LootUIScript  = preload("res://scripts/loot_ui.gd")
 
 var _mtn_base_y: float = 0.0
 var _sky_base_y: float = 0.0
 var _mtn_y: float = 0.0
 var _sky_y: float = 0.0
+
+var _debug_stop_monster: bool = false
+
+func _input(event: InputEvent) -> void:
+	if event is InputEventKey and event.pressed and not event.echo:
+		if event.keycode == KEY_P:
+			_debug_stop_monster = not _debug_stop_monster
+			print("[DEBUG] 괴물 추격 정지 상태: ", _debug_stop_monster)
 
 # ─────────────────────────────────────────────────────────────
 func _ready() -> void:
@@ -108,12 +121,22 @@ func _ready() -> void:
 	_rain = _RainScript.new()
 	_rain_layer.add_child(_rain)
 	_hud  = _HudScript.new();       add_child(_hud)
+	_hud.loot_prompt_clicked.connect(_on_loot_prompt_clicked)
 	_rain.start_rain()
-	
+
+	# ── 인벤토리 / 루팅 UI ──
+	_inv_mgr = _InvMgrScript.new()
+	add_child(_inv_mgr)
+	_loot_ui = _LootUIScript.new()
+	_loot_ui.inv = _inv_mgr
+	add_child(_loot_ui)
+	_loot_ui.loot_ui_closed.connect(func(): _hud.hide_loot_prompt())
+	_hud.loot_ui = _loot_ui
+
 	_camera = Camera2D.new()
 	_camera.position = Vector2(640.0, 360.0)
 	add_child(_camera)
-	
+
 	_hud.follow_viewport_enabled = true
 
 # ── 하늘 (2타일 무한 가로 스크롤) ────────────────────────────
@@ -196,6 +219,11 @@ func _process(delta: float) -> void:
 	
 	# ── playing 상태 ──
 	_vehicle.handle_input(delta)
+
+	# 차량 이동 시 루팅 UI 강제 종료
+	if _vehicle.speed > 0.5 and _loot_ui != null and _loot_ui.is_open():
+		_loot_ui.close()
+		_active_wreck_seed = -1
 	_vehicle.update_scroll(delta)
 	_vehicle.update_fuel(delta)
 	_vehicle.update_rpm(delta)
@@ -203,10 +231,11 @@ func _process(delta: float) -> void:
 	var hill_px := _vehicle.hill_offset_px()
 	
 	# 괴물 간격 업데이트
-	var monster_speed := float(MONSTER_SPEEDS[clampi(current_stage - 1, 0, TOTAL_STAGES - 1)])
-	var speed_diff := _vehicle.speed - monster_speed
-	_monster_distance += speed_diff * 0.05 * delta
-	_monster_distance = maxf(_monster_distance, 0.0)
+	if not _debug_stop_monster:
+		var monster_speed := float(MONSTER_SPEEDS[clampi(current_stage - 1, 0, TOTAL_STAGES - 1)])
+		var speed_diff := _vehicle.speed - monster_speed
+		_monster_distance += speed_diff * 0.05 * delta
+		_monster_distance = maxf(_monster_distance, 0.0)
 	
 	# ── 게임오버 체크: 괴물에게 따라잡힘 ──
 	if _monster_distance <= 0.0:
@@ -317,11 +346,43 @@ func _process(delta: float) -> void:
 		if _jumper_escape_gauge >= JUMPER_ESCAPE_TARGET:
 			_jumper_on_hood = false
 			_jumper_escape_gauge = 0.0
-			_hud.set_jumper_on_hood(false)
+			_hud.set_jumper_on_hood(false, _vehicle.steering_angle > 0.0)
 
 	_prev_steering = _vehicle.steering_angle
 
+	# ── 수색 프롬프트: 정지 + 폐차 인접 시 표시 ──
+	_update_loot_prompt()
 
+
+const LOOT_PROXIMITY_DZ := 5.0  # 폐차 인접 판정 거리
+
+func _update_loot_prompt() -> void:
+	# 점퍼가 보닛에 있으면 수색 프롬프트 숨김
+	if _jumper_on_hood:
+		_hud.hide_loot_prompt()
+		return
+	if _vehicle.speed > 0.5:
+		_hud.hide_loot_prompt()
+		return
+	var nearest := _scavenging.get_nearest_car()
+	if nearest.is_empty() or float(nearest["dz"]) > LOOT_PROXIMITY_DZ:
+		_hud.hide_loot_prompt()
+		return
+	var rect := _scavenging.get_car_screen_rect(nearest)
+	_hud.show_loot_prompt(int(nearest["side"]), rect)
+
+func _on_loot_prompt_clicked() -> void:
+	# 점퍼가 보닛에 있으면 수색 불가
+	if _jumper_on_hood:
+		return
+	var nearest := _scavenging.get_nearest_car()
+	if nearest.is_empty(): return
+	# 폐차 k 값을 시드로 사용
+	var seed_val := int(nearest.get("k", 0)) * 99991 + 7
+	if seed_val == _active_wreck_seed and _loot_ui.is_open():
+		return  # 이미 열려 있음
+	_active_wreck_seed = seed_val
+	_loot_ui.open_wreck(seed_val)
 
 # ── 다음 스테이지로 진행 ────────────────────────────────────
 func _advance_to_next_stage() -> void:
@@ -368,6 +429,10 @@ func _on_jumper_boarded() -> void:
 	_jumper_on_hood = true
 	_jumper_escape_gauge = 0.0
 	_hud.set_jumper_on_hood(true)
+	# 점퍼 탑승 시 루팅 UI 강제 종료
+	if _loot_ui != null and _loot_ui.is_open():
+		_loot_ui.close()
+		_active_wreck_seed = -1
 
 func _update_backdrops_vertical(delta: float, hill_px: float) -> void:
 	# 언덕 시 “올라가는 느낌”은 배경의 아주 약한 상하 시차로만 준다.

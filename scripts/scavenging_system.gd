@@ -126,3 +126,47 @@ func get_draw_entries() -> Array:
 		})
 
 	return entries
+
+## 가장 가까운 폐차 정보 반환 (dz 기준). 없으면 빈 딕셔너리.
+func get_nearest_car() -> Dictionary:
+	var best := {}
+	var best_dz := 999.0
+	var k_min := int(floor((scroll_z + 0.1) / SPACING_Z))
+	var k_max := int(ceil((scroll_z + 20.0) / SPACING_Z))
+	for k in range(k_min, k_max + 1):
+		var o := _car_at_k(k)
+		if o.is_empty():
+			continue
+		var wz := float(o["wz"])
+		var dz := absf(wz - scroll_z)
+		if dz < best_dz:
+			best_dz = dz
+			best = o
+			best["dz"] = dz
+	return best
+
+func get_car_screen_rect(o: Dictionary) -> Rect2:
+	if _tex_car == null or o.is_empty():
+		return Rect2()
+		
+	var wz := float(o["wz"])
+	var dz := wz - scroll_z
+	if dz <= 0.0:
+		return Rect2()
+		
+	var depth: float = CAMERA_DEPTH / dz
+	var hy := HORIZON_Y_BASE + hill_px
+	var road_hw := depth * ROAD_HW_MAX
+	var cx_curve := _curve_at_depth(depth)
+	var road_cx := 640.0 + cx_curve - cam_x * depth * 320.0
+	var ground_y := hy + depth * (ROAD_BOTTOM_Y - hy)
+	
+	var side := int(o["side"])
+	var edge_mult := 1.55
+	var fixed_px := float(side) * 55.0
+	var x := road_cx + float(side) * road_hw * edge_mult + fixed_px
+	
+	var h := depth * 300.0 
+	var w := h * float(_tex_car.get_width()) / maxf(float(_tex_car.get_height()), 1.0)
+	var y := ground_y - h
+	return Rect2(x - w * 0.5, y, w, h)

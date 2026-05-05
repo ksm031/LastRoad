@@ -1,5 +1,7 @@
 extends CanvasLayer
 
+signal loot_prompt_clicked
+
 const RearviewRenderer = preload("res://scripts/rearview_renderer.gd")
 
 # ╔══════════════════════════════════════════════════════════╗
@@ -39,6 +41,7 @@ var _wheel        : Sprite2D
 var _spd_pivot    : Node2D
 var _rpm_pivot    : Node2D
 var _fuel_pivot   : Node2D
+var _fuel_warning_light: ColorRect
 var _hud_spd      : Label
 
 # ── 저연료 및 괴물 추격 시각 효과 ──────────────────────────────────
@@ -86,6 +89,12 @@ const ESCAPE_GAUGE_H     := 10.0
 var _jumper_impact_t     : float = 0.0
 const JUMPER_IMPACT_TIME := 0.45
 
+# ── 수색 프롬프트 ──────────────────────────────────────────
+var _loot_prompt : Control
+var _loot_prompt_label : Label
+var _loot_prompt_side : int = 0  # -1=좌, 1=우, 0=숨김
+var _loot_prompt_car_rect : Rect2
+
 # ── 라디오 시스템 ─────────────────────────────────────────
 const RADIO_PANEL_POS := Vector2(548.0, 570.0) # 라디오 전체 위치 미세조정용 변수
 const RADIO_LCD_OFFSET := Vector2(63.0, 32.0)  # 라디오 패널 내부의 액정(LCD) 오프셋
@@ -98,6 +107,7 @@ const RADIO_TOTAL_STEPS := 42   # (108.0 - 87.5) / 0.5 + 1
 
 var _radio_panel    : Sprite2D
 var _radio_lcd      : Sprite2D
+var _radio_lcd_glow : Sprite2D
 var _radio_dial     : Sprite2D
 var _wiper_switch   : Sprite2D
 var _radio_freq_label : Label
@@ -129,6 +139,7 @@ func _ready() -> void:
 	_build_visual_overlays()
 	_build_stage_overlays()
 	_build_wiper_switch()
+	_build_loot_prompt()
 	_generate_safe_zones(6)  # 스테이지 1 기준: 안전 구간 3.0MHz (6스텝)
 	_setup_cursor()
 	set_process(true)
@@ -151,6 +162,7 @@ var _v_toggled      : bool = false  # 라디오 줌 토글
 var _d_toggled      : bool = false  # 계기판 줌 토글
 var _dash_focus_t   : float = 0.0   # 계기판 줌을 위한 보간 변수 (0~1)
 var _is_dragging_dial : bool = false
+var loot_ui : Node = null           # 인벤토리 UI 참조 (game_world에서 주입)
 var _drag_start_x   : float = 0.0
 var _drag_start_step: int = 0
 const DASH_GAUGES_RECT := Rect2(90.0, 470.0, 420.0, 190.0)
@@ -163,6 +175,12 @@ func _input(event: InputEvent) -> void:
 	# ── 키보드 토글 ──
 	if event is InputEventKey and event.pressed and not event.echo:
 		if event.keycode == KEY_F:
+			# 인벤토리가 열려 있으면 닫고 룸미러 줌 켜기
+			if loot_ui != null and loot_ui.is_open():
+				loot_ui.close()
+				_v_toggled = false
+				_f_toggled = true
+				return
 			if _f_toggled: _f_toggled = false
 			else: _v_toggled = false; _f_toggled = true
 		elif event.keycode == KEY_V:
@@ -256,6 +274,11 @@ func _input(event: InputEvent) -> void:
 					if Rect2(-size * 0.5, size).grow(CLICK_RADIUS).has_point(lp):
 						_wiper_state = (_wiper_state + 1) % 3
 						return
+
+					# 5. 수색 프롬프트 클릭
+				if check_loot_prompt_click(click_glob):
+					loot_prompt_clicked.emit()
+					return
 			else:
 				_is_dragging_dial = false
 
@@ -314,11 +337,23 @@ func _process(delta: float) -> void:
 	if _jumper_hood_overlay != null and _jumper_hood_overlay.visible:
 		if _jumper_sliding_down:
 			_jumper_slide_time -= delta
-			var t := clampf(1.0 - (_jumper_slide_time / 0.4), 0.0, 1.0)
-			# Slide down
-			var y_offset := lerpf(0.0, 500.0, t)
-			_jumper_hood_overlay.position = Vector2(640.0 + _jumper_current_sway, 240.0 + y_offset)
-			_jumper_hood_overlay.modulate = Color(0.42, 0.42, 0.42, 1.0 - t)
+			var elapsed := 0.4 - _jumper_slide_time
+			var frame_idx := clampi(int(elapsed / 0.08), 0, 4)
+			_jumper_hood_overlay.texture = _jumper_down_frames[frame_idx]
+			
+			var y_offset := 0.0
+			var x_offset := 0.0
+			var current_sc := _jumper_base_sc
+			if frame_idx >= 2:
+				var drop_elapsed := elapsed - 0.16
+				var drop_t := clampf(drop_elapsed / 0.24, 0.0, 1.0)
+				y_offset = drop_t * drop_t * 600.0
+				x_offset = drop_t * _jumper_drop_dir * 800.0
+				current_sc = _jumper_base_sc * lerpf(1.0, 0.85, drop_t)
+				
+			_jumper_hood_overlay.position = Vector2(640.0 + _jumper_current_sway + x_offset, 240.0 + y_offset)
+			_jumper_hood_overlay.scale = Vector2(current_sc, current_sc)
+			
 			if _jumper_slide_time <= 0.0:
 				_jumper_hood_overlay.visible = false
 				_jumper_sliding_down = false
@@ -327,11 +362,28 @@ func _process(delta: float) -> void:
 			_jumper_hood_overlay.scale = Vector2(_jumper_base_sc, _jumper_base_sc)
 			_jumper_hood_overlay.modulate = Color(0.42, 0.42, 0.42, 1.0)
 
-
 			# 관성을 이용한 좌우 흔들림 및 회전 적용
 			_jumper_current_sway = lerpf(_jumper_current_sway, _jumper_target_sway, clampf(delta * 4.5, 0.0, 1.0))
 			_jumper_hood_overlay.position = Vector2(640.0 + _jumper_current_sway, 240.0)
 			_jumper_hood_overlay.rotation = lerpf(_jumper_hood_overlay.rotation, deg_to_rad(_jumper_current_sway * 0.05), clampf(delta * 4.5, 0.0, 1.0))
+
+			# hold_side 이미지 전환 로직
+			const SIDE_THRESHOLD := 25.0  # sway 값이 이 이상이면 side 이미지
+			var target_dir := 0
+			if _jumper_current_sway < -SIDE_THRESHOLD:
+				target_dir = -1
+			elif _jumper_current_sway > SIDE_THRESHOLD:
+				target_dir = 1
+
+			_jumper_side_dir = target_dir
+
+			# 최종 텍스처 적용
+			if _jumper_side_dir == 0 or _jumper_hold_side_tex == null:
+				_jumper_hood_overlay.texture = _jumper_hold_tex
+				_jumper_hood_overlay.flip_h = false
+			else:
+				_jumper_hood_overlay.texture = _jumper_hold_side_tex
+				_jumper_hood_overlay.flip_h = (_jumper_side_dir == 1)
 	else:
 		_jumper_target_sway = 0.0
 		_jumper_current_sway = 0.0
@@ -339,9 +391,9 @@ func _process(delta: float) -> void:
 			_jumper_hood_overlay.rotation = 0.0
 
 	_update_wipers(delta)
-
 	_update_portrait_blink(delta)
 	_update_death_tint(delta)
+	_update_dashboard_details(delta)
 
 var _death_tint_t: float = 0.0  # 0: 정상, 1: 완전 붉은빛
 
@@ -352,6 +404,26 @@ func _update_death_tint(delta: float) -> void:
 		_death_tint_t = minf(_death_tint_t + delta * 2.0, 1.0)
 	else:
 		_death_tint_t = maxf(_death_tint_t - delta * 2.0, 0.0)
+
+var _warning_blink_time: float = 0.0
+
+func _update_dashboard_details(delta: float) -> void:
+	# 1. 연료 경고등 깜빡임
+	if _fuel_warning_light != null:
+		if _fuel_ratio < 0.25:
+			_warning_blink_time += delta * 5.0
+			_fuel_warning_light.modulate.a = 0.6 + 0.4 * sin(_warning_blink_time)
+			_fuel_warning_light.visible = true
+		else:
+			_fuel_warning_light.visible = false
+			
+	# 2. 라디오 액정 야간 발광(Glow) 효과
+	if _radio_lcd_glow != null:
+		var base_glow := 0.3
+		if _radio_on_death:
+			var time := Time.get_ticks_msec() / 1000.0
+			base_glow = 0.4 + 0.2 * sin(time * 8.0)
+		_radio_lcd_glow.modulate.a = base_glow
 
 	# 맥동: 0.08 진폭으로 천천히 흔들림
 	var pulse := sin(float(Time.get_ticks_msec()) * 0.002) * 0.08 + 0.92
@@ -486,6 +558,18 @@ func _build_radio() -> void:
 	_radio_lcd.texture_filter = CanvasItem.TEXTURE_FILTER_NEAREST
 	_dash.add_child(_radio_lcd)
 	
+	_radio_lcd_glow = Sprite2D.new()
+	if _tex_lcd_death:
+		_radio_lcd_glow.texture = _tex_lcd_death
+	_radio_lcd_glow.centered = false
+	_radio_lcd_glow.position = (RADIO_PANEL_POS + RADIO_LCD_OFFSET) * scale_inv
+	_radio_lcd_glow.scale = scale_inv
+	_radio_lcd_glow.texture_filter = CanvasItem.TEXTURE_FILTER_NEAREST
+	_radio_lcd_glow.material = CanvasItemMaterial.new()
+	_radio_lcd_glow.material.blend_mode = CanvasItemMaterial.BLEND_MODE_ADD
+	_radio_lcd_glow.modulate = Color(1.0, 1.0, 1.0, 0.3)
+	_dash.add_child(_radio_lcd_glow)
+	
 	# 주파수 표시 라벨 (LCD 위에 오버레이)
 	_radio_freq_label = Label.new()
 	_radio_freq_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
@@ -554,10 +638,12 @@ func _update_radio_display() -> void:
 	if _radio_lcd:
 		if _radio_on_death:
 			_radio_lcd.texture = _tex_lcd_death
+			if _radio_lcd_glow: _radio_lcd_glow.texture = _tex_lcd_death
 			if _radio_freq_label:
 				_radio_freq_label.add_theme_color_override("font_color", Color(0.95, 0.85, 0.2))
 		else:
 			_radio_lcd.texture = _tex_lcd_normal
+			if _radio_lcd_glow: _radio_lcd_glow.texture = _tex_lcd_normal
 			if _radio_freq_label:
 				_radio_freq_label.add_theme_color_override("font_color", Color(0.95, 0.85, 0.2))
 	
@@ -589,6 +675,13 @@ func _build_fuel_needle() -> void:
 	# fuel gauge needle.png이 1×23px로 너무 작아 보이지 않으므로, speed meter needle을 재활용
 	_fuel_pivot = _make_needle_pivot(FUEL_GAUGE_CENTER, "res://Asset/Image/speed meter needle.png", FUEL_NEEDLE_SCALE)
 	_fuel_pivot.rotation = deg_to_rad(FUEL_ANGLE_MAX)  # 시작: Full(오른쪽)
+	
+	_fuel_warning_light = ColorRect.new()
+	_fuel_warning_light.size = Vector2(8, 8)
+	_fuel_warning_light.color = Color(1.0, 0.1, 0.1, 1.0)
+	_fuel_warning_light.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_fuel_warning_light.visible = false
+	add_child(_fuel_warning_light)
 
 func _make_needle_pivot(center: Vector2, tex_path: String, sc: float) -> Node2D:
 	var pivot := Node2D.new()
@@ -652,6 +745,51 @@ func _build_visual_overlays() -> void:
 	_monster_vignette.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	add_child(_monster_vignette)
 
+## 수색 프롬프트 UI 생성
+func _build_loot_prompt() -> void:
+	_loot_prompt = Control.new()
+	_loot_prompt.visible = false
+	_loot_prompt.mouse_filter = Control.MOUSE_FILTER_IGNORE
+
+	# 텍스트
+	_loot_prompt_label = Label.new()
+	_loot_prompt_label.text = "▼ 수색"
+	_loot_prompt_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	_loot_prompt_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	_loot_prompt_label.position = Vector2.ZERO
+	_loot_prompt_label.size = Vector2(80.0, 30.0)
+	_loot_prompt_label.add_theme_font_size_override("font_size", 20)
+	_loot_prompt_label.add_theme_color_override("font_color", Color.WHITE)
+	_loot_prompt_label.add_theme_color_override("font_outline_color", Color.BLACK)
+	_loot_prompt_label.add_theme_constant_override("outline_size", 4)
+	_loot_prompt_label.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_loot_prompt.add_child(_loot_prompt_label)
+
+	add_child(_loot_prompt)
+
+## 수색 프롬프트 표시
+func show_loot_prompt(side: int, car_rect: Rect2) -> void:
+	_loot_prompt_side = side
+	_loot_prompt_car_rect = car_rect
+	_loot_prompt.visible = true
+	var cx = car_rect.position.x + car_rect.size.x * 0.5
+	var cy = car_rect.position.y - 30.0
+	_loot_prompt.position = Vector2(cx - 40.0, cy)
+
+## 수색 프롬프트 숨김
+func hide_loot_prompt() -> void:
+	_loot_prompt_side = 0
+	_loot_prompt.visible = false
+	_loot_prompt_car_rect = Rect2()
+
+## 수색 프롬프트 클릭 판정 (CLICK_RADIUS 적용)
+func check_loot_prompt_click(click_pos: Vector2) -> bool:
+	if not _loot_prompt.visible:
+		return false
+	var label_rect := Rect2(_loot_prompt.position, Vector2(80.0, 30.0)).grow(CLICK_RADIUS)
+	var car_rect := _loot_prompt_car_rect.grow(CLICK_RADIUS)
+	return label_rect.has_point(click_pos) or car_rect.has_point(click_pos)
+
 ## 게임오버 / 스테이지 클리어 오버레이 생성
 func _build_stage_overlays() -> void:
 	# 전체 화면 검은색 오버레이 (게임오버 암전용)
@@ -676,19 +814,33 @@ func _build_stage_overlays() -> void:
 
 var _jumper_base_sc : float = 1.0
 var _jumper_hood_time : float = 0.0
+var _jumper_down_frames : Array[Texture2D] = []
+var _jumper_hold_tex : Texture2D
+var _jumper_hold_side_tex : Texture2D
+
+# 0=idle(hold_01), 1=right(hold_side), -1=left(hold_side flipped)
+var _jumper_side_dir    : int   = 0
 
 ## 점퍼 보닛 오버레이 생성 (dashboard보다 먼저 _ready에서 호출)
 func _build_jumper_overlay() -> void:
 	# 보닛 위 점퍼 스프라이트 (도로 뷰 하단 중앙)
 	_jumper_hood_overlay = Sprite2D.new()
-	var tex := load("res://Asset/Image/Character/jumper_hold_01.png") as Texture2D
-	if tex:
-		_jumper_hood_overlay.texture = tex
+	
+	_jumper_hold_tex      = load("res://Asset/Image/Character/jumper_hold_01.png") as Texture2D
+	_jumper_hold_side_tex = load("res://Asset/Image/Character/jumper_hold_side.png") as Texture2D
+	_jumper_down_frames.clear()
+	for i in range(1, 6):
+		var tex = load("res://Asset/Image/Character/jumper_down_0%d.png" % i) as Texture2D
+		if tex:
+			_jumper_down_frames.append(tex)
+	
+	if _jumper_hold_tex:
+		_jumper_hood_overlay.texture = _jumper_hold_tex
 		_jumper_hood_overlay.centered = true
 		_jumper_hood_overlay.texture_filter = CanvasItem.TEXTURE_FILTER_NEAREST
 		# 세로 기준으로 스케일 설정 (화면에 크게)
 		var target_h := 1350.0
-		var sc := target_h / float(tex.get_height())
+		var sc := target_h / float(_jumper_hold_tex.get_height())
 		_jumper_base_sc = sc
 		_jumper_hood_overlay.scale = Vector2(sc, sc)
 	_jumper_hood_overlay.position = Vector2(640.0, 240.0)
@@ -722,9 +874,10 @@ func sway_jumper(angle: float) -> void:
 
 var _jumper_sliding_down: bool = false
 var _jumper_slide_time: float = 0.0
+var _jumper_drop_dir: float = 0.0
 
 ## 보닛 위 점퍼 표시/숨김
-func set_jumper_on_hood(on: bool) -> void:
+func set_jumper_on_hood(on: bool, drop_left: bool = false) -> void:
 	if _jumper_hood_overlay:
 		if on:
 			_jumper_hood_overlay.visible = true
@@ -732,11 +885,15 @@ func set_jumper_on_hood(on: bool) -> void:
 			_jumper_sliding_down = false
 			_jumper_slide_time = 0.0
 			_jumper_hood_overlay.modulate = Color(0.42, 0.42, 0.42, 1.0)
+			_jumper_hood_overlay.flip_h = false
+			_jumper_side_dir     = 0
 			_jumper_impact_t = JUMPER_IMPACT_TIME
 		else:
 			if _jumper_hood_overlay.visible and not _jumper_sliding_down:
 				_jumper_sliding_down = true
 				_jumper_slide_time = 0.4
+				_jumper_hood_overlay.flip_h = not drop_left
+				_jumper_drop_dir = -1.0 if drop_left else 1.0
 			else:
 				_jumper_hood_overlay.visible = false
 				_jumper_sliding_down = false
@@ -801,7 +958,7 @@ func update(speed: float, scroll_z: float, steering_angle: float, rpm: float, mo
 		_hud_spd.text = "ST%d [%.0f%%]  |  %.0f km/h  |  연료: %.1f L  |  정신력: %.0f%%  |  괴물: %.1f" % [stage, progress, speed, fuel_ratio * 40.0, sanity_ratio * 100.0, monster_distance]
 		
 	if _rearview_node != null:
-		_rearview_node.update_state(scroll_z, monster_distance, delta)
+		_rearview_node.update_state(scroll_z, monster_distance, delta, _f_toggled)
 
 func _update_gauges(speed: float, rpm: float, fuel_ratio: float = 1.0) -> void:
 	if _spd_pivot != null:
@@ -978,6 +1135,8 @@ func _update_shake(speed: float, scroll_z: float, steering_angle: float) -> void
 		_rpm_pivot.position = RPM_GAUGE_CENTER + offset
 	if _fuel_pivot != null:
 		_fuel_pivot.position = FUEL_GAUGE_CENTER + offset
+	if _fuel_warning_light != null:
+		_fuel_warning_light.position = FUEL_GAUGE_CENTER + offset + Vector2(-15.0, 10.0) - _fuel_warning_light.size * 0.5
 	if _mirror_clip != null:
 		_mirror_clip.position = MIRROR_MIN
 
