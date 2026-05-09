@@ -50,12 +50,16 @@ var _monster_vignette : ColorRect
 var _fuel_ratio       : float = 1.0
 var _sanity_ratio     : float = 1.0
 
-const IMPACT_TIME := 0.22
-const IMPACT_MAG  := 9.0
-var _impact_t: float = 0.0
-
-const WATCHER_IMPACT_TIME := 0.6
-var _watcher_impact_t: float = 0.0
+# ── 대시보드 진동 통합 관리 ─────────────────────────────────
+# 모든 진동 타입 정의: { duration(초), mag(크기 배수) }
+const SHAKE_DEFS := {
+	"rock":    { "duration": 0.22, "mag": 9.0 },
+	"watcher": { "duration": 0.60, "mag": 1.0 },
+	"jumper":  { "duration": 0.45, "mag": 1.0 },
+	"fuel":    { "duration": 1.00, "mag": 1.0 },
+}
+# 활성 진동: type → 남은 시간(초)
+var _shakes: Dictionary = {}
 
 var _focusing: bool = false
 var _focus_t: float = 0.0
@@ -86,8 +90,21 @@ var _escape_gauge_bg     : ColorRect
 var _escape_gauge_fill   : ColorRect
 const ESCAPE_GAUGE_W     := 300.0
 const ESCAPE_GAUGE_H     := 10.0
-var _jumper_impact_t     : float = 0.0
-const JUMPER_IMPACT_TIME := 0.45
+## 진동 트리거 — 외부(game_world) 및 내부 모두 이 함수만 사용
+func trigger_shake(type: String) -> void:
+	var def: Dictionary = SHAKE_DEFS.get(type, {})
+	if def.is_empty():
+		return
+	_shakes[type] = def["duration"]
+
+## 진동 강도 비율 (0.0~1.0) — _update_shake 내부에서 사용
+func _shake_ratio(type: String) -> float:
+	if not _shakes.has(type):
+		return 0.0
+	var def: Dictionary = SHAKE_DEFS.get(type, {})
+	if def.is_empty():
+		return 0.0
+	return _shakes[type] / def["duration"]
 
 # ── 수색 프롬프트 ──────────────────────────────────────────
 var _loot_prompt : Control
@@ -114,6 +131,13 @@ var _radio_freq_label : Label
 var _tex_lcd_normal : Texture2D
 var _tex_lcd_death  : Texture2D
 
+# ── 시계 시스템 ──────────────────────────────────────────
+const CLOCK_POS := Vector2(635.0, 518.0) # 라디오 위쪽 사각형 부근 위치
+var _clock_label: Label
+var _clock_glow: Label
+var _time_seconds: float = 2.0 * 3600.0 + 47.0 * 60.0 # 02:47
+var _clock_blink_timer: float = 0.0
+
 var _radio_step     : int = 0      # 0 = 87.5 MHz, 205 = 108.0 MHz
 var _radio_on_death : bool = true   # 현재 죽음의 주파수인지
 var _v_pressed      : bool = false  # V키 토글
@@ -121,8 +145,11 @@ var _radio_focus_t  := 0.0          # 라디오 줌을 위한 보간 변수 (0~1
 var _radio_tune_timer := 0.0
 const RADIO_TUNE_DELAY := 0.15      # 0.5 스텝에 맞춘 적절한 이동 속도
 
-# 죽음의 주파수 구간 정의 (안전 구간 2개)
-var _safe_zones : Array = []  # [[start_step, end_step], ...]
+# 안전 주파수 구간 (스테이지 중 2회 변경)
+var _safe_zone         : Array = []   # [start_step, end_step] 현재 안전 구간
+var _used_zone_centers : Array = []   # 이번 스테이지에 사용된 구간 중심 목록
+var _safe_change_sched : Array = []   # 변경 예약 거리 목록 (stage_dist 기준)
+var _safe_change_width : int   = 6    # 현재 스테이지 안전 구간 폭
 
 const CLICK_RADIUS := 16.0  # 커서 원의 반지름 (32x32 / 2), 관대한 클릭 판정에 사용
 
@@ -135,12 +162,13 @@ func _ready() -> void:
 	_build_fuel_needle()
 	_build_wheel()
 	_build_radio()
+	_build_clock()
 	_build_labels()
 	_build_visual_overlays()
 	_build_stage_overlays()
 	_build_wiper_switch()
 	_build_loot_prompt()
-	_generate_safe_zones(6)  # 스테이지 1 기준: 안전 구간 3.0MHz (6스텝)
+	update_radio_for_stage(1, 600.0)  # 스테이지 1 기본 초기화
 	_setup_cursor()
 	set_process(true)
 
@@ -163,9 +191,11 @@ var _d_toggled      : bool = false  # 계기판 줌 토글
 var _dash_focus_t   : float = 0.0   # 계기판 줌을 위한 보간 변수 (0~1)
 var _is_dragging_dial : bool = false
 var loot_ui : Node = null           # 인벤토리 UI 참조 (game_world에서 주입)
+var shop_ui : Node = null           # 상점/경로선택 UI 참조 (game_world에서 주입)
 var _drag_start_x   : float = 0.0
 var _drag_start_step: int = 0
 const DASH_GAUGES_RECT := Rect2(90.0, 470.0, 420.0, 190.0)
+const GLOVEBOX_RECT    := Rect2(850.0, 470.0, 380.0, 190.0)
 
 
 
@@ -174,7 +204,17 @@ var _drag_accum : float = 0.0
 func _input(event: InputEvent) -> void:
 	# ── 키보드 토글 ──
 	if event is InputEventKey and event.pressed and not event.echo:
-		if event.keycode == KEY_F:
+		if event.keycode == KEY_TAB:
+			if loot_ui != null:
+				if loot_ui.is_open():
+					loot_ui.close()
+				else:
+					_f_toggled = false
+					_v_toggled = false
+					_d_toggled = false
+					loot_ui.open_trunk()
+			return
+		elif event.keycode == KEY_F:
 			# 인벤토리가 열려 있으면 닫고 룸미러 줌 켜기
 			if loot_ui != null and loot_ui.is_open():
 				loot_ui.close()
@@ -188,7 +228,13 @@ func _input(event: InputEvent) -> void:
 			else: _f_toggled = false; _v_toggled = true
 		return
 			
-	# ── 마우스 버튼 ──
+	# ── 마우스 버튼 (UI가 열려 있으면 차단 및 포인터 표시) ──
+	var is_ui_open = (loot_ui != null and loot_ui.is_open()) or (shop_ui != null and shop_ui.is_open())
+	if is_ui_open:
+		if event is InputEventMouseButton or event is InputEventMouseMotion:
+			Input.set_mouse_mode(Input.MOUSE_MODE_VISIBLE)
+			return
+			
 	if event is InputEventMouseButton:
 		# 클릭 중에는 커서 숨김, 뗄 때 복원
 		if event.button_index == MOUSE_BUTTON_LEFT or event.button_index == MOUSE_BUTTON_RIGHT:
@@ -265,7 +311,16 @@ func _input(event: InputEvent) -> void:
 					_v_toggled = false
 					return
 
-				# 4. 와이퍼 스위치
+				# 4. 사물함(글로브박스) 클릭 진입 (인벤토리)
+				if GLOVEBOX_RECT.grow(CLICK_RADIUS).has_point(click_glob):
+					if loot_ui != null:
+						_f_toggled = false
+						_v_toggled = false
+						_d_toggled = false
+						loot_ui.open_trunk()
+					return
+
+				# 5. 와이퍼 스위치
 				if _wiper_switch:
 					# 와이퍼 스위치 노드 자체의 로컬 마우스 좌표로 판정
 					var lp := _wiper_switch.get_local_mouse_position()
@@ -296,12 +351,10 @@ func _input(event: InputEvent) -> void:
 				_drag_accum = fmod(_drag_accum, 10.0)
 
 func _process(delta: float) -> void:
-	if _impact_t > 0.0:
-		_impact_t = maxf(_impact_t - delta, 0.0)
-	if _watcher_impact_t > 0.0:
-		_watcher_impact_t = maxf(_watcher_impact_t - delta, 0.0)
-	if _jumper_impact_t > 0.0:
-		_jumper_impact_t = maxf(_jumper_impact_t - delta, 0.0)
+	for key in _shakes.keys():
+		_shakes[key] = maxf(_shakes[key] - delta, 0.0)
+		if _shakes[key] == 0.0:
+			_shakes.erase(key)
 
 		
 	# 포커싱 (거울)
@@ -335,7 +388,22 @@ func _process(delta: float) -> void:
 		_wheel.modulate.a = 1.0 - ease_dash
 
 	if _jumper_hood_overlay != null and _jumper_hood_overlay.visible:
-		if _jumper_sliding_down:
+		if _jumper_crushed:
+			_jumper_crush_time -= delta
+			var t := clampf(1.0 - _jumper_crush_time / CRUSH_DURATION, 0.0, 1.0)
+			# 아래로 빠르게 떨어지며 납작해짐 (스케일 y 감소)
+			var y_drop := t * t * 500.0
+			var squash_y := lerpf(1.0, 0.15, t)
+			var squash_x := lerpf(1.0, 1.6,  t)   # 납작해지면 가로로 퍼짐
+			_jumper_hood_overlay.position = Vector2(640.0, 240.0 + y_drop)
+			_jumper_hood_overlay.scale = Vector2(_jumper_base_sc * squash_x, _jumper_base_sc * squash_y)
+			_jumper_hood_overlay.modulate.a = lerpf(1.0, 0.0, clampf((t - 0.6) / 0.4, 0.0, 1.0))
+			if _jumper_crush_time <= 0.0:
+				_jumper_hood_overlay.visible = false
+				_jumper_crushed = false
+				_jumper_hood_overlay.scale = Vector2(_jumper_base_sc, _jumper_base_sc)
+				_jumper_hood_overlay.modulate = Color(0.42, 0.42, 0.42, 1.0)
+		elif _jumper_sliding_down:
 			_jumper_slide_time -= delta
 			var elapsed := 0.4 - _jumper_slide_time
 			var frame_idx := clampi(int(elapsed / 0.08), 0, 4)
@@ -357,15 +425,15 @@ func _process(delta: float) -> void:
 			if _jumper_slide_time <= 0.0:
 				_jumper_hood_overlay.visible = false
 				_jumper_sliding_down = false
-				_watcher_impact_t = WATCHER_IMPACT_TIME
+				trigger_shake("watcher")
 		else:
 			_jumper_hood_overlay.scale = Vector2(_jumper_base_sc, _jumper_base_sc)
 			_jumper_hood_overlay.modulate = Color(0.42, 0.42, 0.42, 1.0)
 
 			# 관성을 이용한 좌우 흔들림 및 회전 적용
-			_jumper_current_sway = lerpf(_jumper_current_sway, _jumper_target_sway, clampf(delta * 4.5, 0.0, 1.0))
+			_jumper_current_sway = lerpf(_jumper_current_sway, _jumper_target_sway, clampf(delta * 10.0, 0.0, 1.0))
 			_jumper_hood_overlay.position = Vector2(640.0 + _jumper_current_sway, 240.0)
-			_jumper_hood_overlay.rotation = lerpf(_jumper_hood_overlay.rotation, deg_to_rad(_jumper_current_sway * 0.05), clampf(delta * 4.5, 0.0, 1.0))
+			_jumper_hood_overlay.rotation = lerpf(_jumper_hood_overlay.rotation, deg_to_rad(_jumper_current_sway * 0.15), clampf(delta * 10.0, 0.0, 1.0))
 
 			# hold_side 이미지 전환 로직
 			const SIDE_THRESHOLD := 25.0  # sway 값이 이 이상이면 side 이미지
@@ -432,10 +500,10 @@ func _update_dashboard_details(delta: float) -> void:
 	_dash.modulate = Color(1.0, 1.0 - tint_strength * 0.35, 1.0 - tint_strength * 0.35)
 
 func on_rock_hit() -> void:
-	_impact_t = IMPACT_TIME
+	trigger_shake("rock")
 
 func on_watcher_hit() -> void:
-	_watcher_impact_t = WATCHER_IMPACT_TIME
+	trigger_shake("watcher")
 
 func _build_portrait_and_mirror() -> void:
 	_mirror_clip = Control.new()
@@ -593,6 +661,40 @@ func _build_radio() -> void:
 	_dash.add_child(_radio_dial)
 	_update_radio_display()
 
+func _build_clock() -> void:
+	if _dash == null: return
+	var scale_inv := Vector2(1.0 / _dash.scale.x, 1.0 / _dash.scale.y)
+	
+	var font_clock := load("res://Font/DS-DIGII.TTF") as Font
+	
+	_clock_label = Label.new()
+	if font_clock:
+		_clock_label.add_theme_font_override("font", font_clock)
+	_clock_label.add_theme_font_size_override("font_size", 18)
+	_clock_label.add_theme_color_override("font_color", Color(1.0, 0.2, 0.2, 1.0))
+	_clock_label.text = "02:47"
+	_clock_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	_clock_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	_clock_label.position = CLOCK_POS * scale_inv
+	_clock_label.scale = scale_inv
+	_dash.add_child(_clock_label)
+
+	_clock_glow = Label.new()
+	if font_clock:
+		_clock_glow.add_theme_font_override("font", font_clock)
+	_clock_glow.add_theme_font_size_override("font_size", 18)
+	_clock_glow.add_theme_color_override("font_color", Color(1.0, 0.0, 0.0, 0.8))
+	_clock_glow.text = "02:47"
+	_clock_glow.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	_clock_glow.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	_clock_glow.position = CLOCK_POS * scale_inv
+	_clock_glow.scale = scale_inv
+	
+	var mat_clock_glow := CanvasItemMaterial.new()
+	mat_clock_glow.blend_mode = CanvasItemMaterial.BLEND_MODE_ADD
+	_clock_glow.material = mat_clock_glow
+	_dash.add_child(_clock_glow)
+
 func _build_wiper_switch() -> void:
 	if _wheel == null: return
 	
@@ -607,21 +709,54 @@ func _build_wiper_switch() -> void:
 	_wheel.add_child(_wiper_switch)
 
 ## 안전 구간 생성 (스테이지에 따라 폭이 달라짐)
-func _generate_safe_zones(safe_width: int) -> void:
-	_safe_zones.clear()
-	# 2개의 안전 구간을 전체 스텝(42개) 내에 랜덤 배치
-	var zone1_start := randi_range(2, 18 - safe_width)
-	var zone2_start := randi_range(22, 38 - safe_width)
-	_safe_zones.append([zone1_start, zone1_start + safe_width - 1])
-	_safe_zones.append([zone2_start, zone2_start + safe_width - 1])
+## 안전 주파수 중심 선택 — 이미 사용된 중심에서 MIN_DIST 이상 떨어진 위치 랜덤 선택
+func _pick_safe_center(w: int, excluded: Array) -> int:
+	const MIN_DIST := 8  # 최소 4MHz 이상 떨어져야 함
+	var half := w / 2
+	var lo := half + 1
+	var hi := RADIO_TOTAL_STEPS - 2 - half
+	for _i in 100:
+		var c := randi_range(lo, hi)
+		var ok := true
+		for ec in excluded:
+			if absi(c - int(ec)) < MIN_DIST:
+				ok = false
+				break
+		if ok:
+			return c
+	# 100회 실패 시 거리 조건 완화해서 재시도
+	for _i in 100:
+		var c := randi_range(lo, hi)
+		var ok := true
+		for ec in excluded:
+			if absi(c - int(ec)) < 4:
+				ok = false
+				break
+		if ok:
+			return c
+	return randi_range(lo, hi)  # 최후 폴백
+
+## 새 안전 구간으로 전환 (이번 스테이지 내 재사용 금지)
+func _rotate_safe_zone() -> void:
+	var c := _pick_safe_center(_safe_change_width, _used_zone_centers)
+	var half := _safe_change_width / 2
+	_safe_zone = [c - half, c + half]
+	_used_zone_centers.append(c)
 	_update_radio_display()
+
+## 스테이지 진행에 따라 예약된 안전구간 변경 처리
+func _update_safe_zone_schedule(stage_dist: float) -> void:
+	if _safe_change_sched.is_empty():
+		return
+	if stage_dist >= float(_safe_change_sched[0]):
+		_safe_change_sched.pop_front()
+		_rotate_safe_zone()
 
 ## 현재 주파수가 안전 구간인지 확인
 func _is_safe_frequency() -> bool:
-	for zone in _safe_zones:
-		if _radio_step >= int(zone[0]) and _radio_step <= int(zone[1]):
-			return true
-	return false
+	if _safe_zone.is_empty():
+		return false
+	return _radio_step >= int(_safe_zone[0]) and _radio_step <= int(_safe_zone[1])
 
 ## 라디오 표시 업데이트 (LCD 텍스처, 주파수 텍스트, 다이얼 회전)
 func _update_radio_display() -> void:
@@ -657,12 +792,26 @@ func _update_radio_display() -> void:
 func get_radio_on_death() -> bool:
 	return _radio_on_death
 
-## 스테이지별 안전 구간 폭 업데이트
-func update_radio_for_stage(stage: int) -> void:
-	# 스테이지 1~6: 0.5 MHz 스텝 단위의 안전구간 스텝 수 (3.0, 2.0, 1.5, 1.0, 1.0, 0.5 MHz)
+## 스테이지 시작 시 안전 주파수 초기화 — 라디오를 안전 주파수로 세팅하고 변경 스케줄 예약
+func update_radio_for_stage(stage: int, stage_len: float = 600.0) -> void:
+	# 스테이지 1~6: 안전구간 폭 (스텝 수) — 3.0 / 2.0 / 1.5 / 1.0 / 1.0 / 0.5 MHz
 	var widths := [6, 4, 3, 2, 2, 1]
-	var w := int(widths[clampi(stage - 1, 0, 5)])
-	_generate_safe_zones(w)
+	_safe_change_width = int(widths[clampi(stage - 1, 0, 5)])
+	_used_zone_centers.clear()
+
+	# 초기 안전 주파수 생성 및 라디오 세팅
+	var c := _pick_safe_center(_safe_change_width, [])
+	var half := _safe_change_width / 2
+	_safe_zone = [c - half, c + half]
+	_used_zone_centers.append(c)
+	_radio_step = c  # 안전 주파수 중앙으로 라디오 세팅
+
+	# 스테이지 내 2회 변경 타이밍 예약 (전반/후반에 각 1회씩 랜덤)
+	var t1 := randf_range(0.20, 0.45) * stage_len
+	var t2 := randf_range(0.55, 0.82) * stage_len
+	_safe_change_sched = [t1, t2]
+
+	_update_radio_display()
 
 
 func _build_needles() -> void:
@@ -887,7 +1036,7 @@ func set_jumper_on_hood(on: bool, drop_left: bool = false) -> void:
 			_jumper_hood_overlay.modulate = Color(0.42, 0.42, 0.42, 1.0)
 			_jumper_hood_overlay.flip_h = false
 			_jumper_side_dir     = 0
-			_jumper_impact_t = JUMPER_IMPACT_TIME
+			trigger_shake("jumper")
 		else:
 			if _jumper_hood_overlay.visible and not _jumper_sliding_down:
 				_jumper_sliding_down = true
@@ -906,6 +1055,19 @@ func set_jumper_on_hood(on: bool, drop_left: bool = false) -> void:
 		_escape_gauge_fill.size.x = 0.0
 
 
+
+## 점퍼가 새 점퍼에 치여 깔리는 연출 (점프 없이 바로 아래로)
+var _jumper_crushed: bool = false
+var _jumper_crush_time: float = 0.0
+const CRUSH_DURATION := 0.35
+
+func crush_jumper_on_hood() -> void:
+	if _jumper_hood_overlay == null or not _jumper_hood_overlay.visible:
+		return
+	_jumper_crushed = true
+	_jumper_sliding_down = false
+	_jumper_crush_time = CRUSH_DURATION
+	trigger_shake("watcher")
 
 ## 탈출 게이지 진행률 갱신 (0.0 ~ 1.0)
 func update_escape_gauge(ratio: float) -> void:
@@ -936,12 +1098,24 @@ func show_stage_clear(stage: int, is_final: bool) -> void:
 		_center_label.text = "STAGE %d CLEAR\n\n다음 구간으로 이동 중..." % stage
 	_center_label.add_theme_font_size_override("font_size", 42)
 
+## 스테이지 클리어 전 모든 UI 포커스/토글 상태 원상복구
+func reset_focus_states() -> void:
+	_focus_t       = 0.0
+	_radio_focus_t = 0.0
+	_dash_focus_t  = 0.0
+	_f_toggled     = false
+	_v_toggled     = false
+
 ## 스테이지 오버레이 숨김
 func hide_stage_overlay() -> void:
 	_gameover_overlay.visible = false
 	_gameover_overlay.color = Color(0.0, 0.0, 0.0, 0.0)
 	_center_label.visible = false
 	_center_label.text = ""
+
+## 연료 소진 시 엔진 정지 충격
+func on_fuel_depleted() -> void:
+	trigger_shake("fuel")
 
 # ── 외부에서 매 프레임 호출 (차량 상태 갱신) ─────────────────────
 func update(speed: float, scroll_z: float, steering_angle: float, rpm: float, monster_distance: float, delta: float, fuel_ratio: float, sanity_ratio: float = 1.0, stage: int = 1, stage_dist: float = 0.0, stage_len: float = 600.0) -> void:
@@ -951,6 +1125,9 @@ func update(speed: float, scroll_z: float, steering_angle: float, rpm: float, mo
 	_update_gauges(speed, rpm, fuel_ratio)
 	_update_shake(speed, scroll_z, steering_angle)
 	_update_visual_effects(monster_distance)
+	_update_clock(delta)
+	_update_safe_zone_schedule(stage_dist)
+	
 	if _wheel != null:
 		_wheel.rotation = deg_to_rad(steering_angle)
 	if _hud_spd != null:
@@ -972,15 +1149,31 @@ func _update_gauges(speed: float, rpm: float, fuel_ratio: float = 1.0) -> void:
 		var ft := clampf(fuel_ratio, 0.0, 1.0)
 		_fuel_pivot.rotation = deg_to_rad(lerpf(FUEL_ANGLE_MIN, FUEL_ANGLE_MAX, ft))
 
+func _update_clock(delta: float) -> void:
+	_time_seconds += delta
+	_clock_blink_timer += delta
+	
+	var total_minutes = int(_time_seconds / 60.0)
+	var hours = (total_minutes / 60) % 24
+	var mins = total_minutes % 60
+	
+	var show_colon = int(_clock_blink_timer * 2.0) % 2 == 0 # 0.5초마다 깜빡임
+	var time_str = "%02d:%02d" % [hours, mins]
+	if not show_colon:
+		time_str = "%02d %02d" % [hours, mins]
+		
+	if _clock_label:
+		_clock_label.text = time_str
+	if _clock_glow:
+		_clock_glow.text = time_str
 
 ## 상태별 시각 효과 업데이트
 func _update_visual_effects(monster_distance: float) -> void:
 	# 연료 40% 이하: 화면 하단 어두워짐 (저연료 표시)
 	if _low_fuel_overlay != null:
 		var dark_alpha := 0.0
-		if _fuel_ratio < 0.40:
-			# 40%→0% 에서 투명도 0→0.55
-			dark_alpha = lerpf(0.0, 0.55, 1.0 - _fuel_ratio / 0.40)
+		# (연료 부족 시 어두워지는 효과 제거됨)
+		pass
 		_low_fuel_overlay.color = Color(0.0, 0.0, 0.0, dark_alpha)
 
 	# 괴물 거리 30.0 이하: 적색 비네트 깜빡임 (가까워질수록 강해짐)
@@ -1082,26 +1275,32 @@ func _update_shake(speed: float, scroll_z: float, steering_angle: float) -> void
 	var sway   := -(steering_angle / 35.0) * 2.5 * shake_mult
 	var offset := Vector2(sway, bounce)
 
-	if _impact_t > 0.0:
-		var t := _impact_t / IMPACT_TIME
-		var kick := t * t
+	var rock_t := _shake_ratio("rock")
+	if rock_t > 0.0:
+		var kick := rock_t * rock_t
 		var ph := float(Time.get_ticks_msec()) * 0.055
-		# 충돌 진동은 포커싱 중에도 유지할지 선택 (현재는 같이 감쇠)
-		offset += Vector2(sin(ph * 1.7), cos(ph * 2.1)) * (IMPACT_MAG * kick) * shake_mult
-		
-	if _watcher_impact_t > 0.0:
-		# 와쳐 충돌: 차가 위로 붕 떴다가 덜컹거리는 느낌 (큰 진폭)
-		var t := _watcher_impact_t / WATCHER_IMPACT_TIME
-		var kick := t * t
-		var bounce_y := sin(t * PI) * 35.0  # 위로 35px 솟구침
-		var shake_y  := sin(t * 30.0) * 10.0 * kick # 거친 덜덜거림
+		offset += Vector2(sin(ph * 1.7), cos(ph * 2.1)) * (SHAKE_DEFS["rock"]["mag"] * kick) * shake_mult
+
+	var watcher_t := _shake_ratio("watcher")
+	if watcher_t > 0.0:
+		# 와쳐/연료: 위로 붕 떴다가 덜컹거리는 느낌
+		var kick := watcher_t * watcher_t
+		var bounce_y := sin(watcher_t * PI) * 35.0
+		var shake_y  := sin(watcher_t * 30.0) * 10.0 * kick
 		offset += Vector2(0.0, -bounce_y + shake_y) * shake_mult
 
-	if _jumper_impact_t > 0.0:
-		# 점퍼 착지: 차가 아래로 쿵 내려앉았다가 위로 퉁 솟구치는 느낌 (아래에서 위로)
-		var t := _jumper_impact_t / JUMPER_IMPACT_TIME
-		var jiggle := sin((1.0 - t) * PI * 2.0) * 55.0 * t
+	var jumper_t := _shake_ratio("jumper")
+	if jumper_t > 0.0:
+		# 점퍼 착지: 아래로 쿵 내려앉았다가 퉁 솟구침
+		var jiggle := sin((1.0 - jumper_t) * PI * 2.0) * 55.0 * jumper_t
 		offset += Vector2(0.0, jiggle) * shake_mult
+
+	var fuel_t := _shake_ratio("fuel")
+	if fuel_t > 0.0:
+		var kick := fuel_t * fuel_t
+		var bounce_y := sin(fuel_t * PI) * 35.0
+		var shake_y  := sin(fuel_t * 30.0) * 10.0 * kick
+		offset += Vector2(0.0, -bounce_y + shake_y) * shake_mult
 
 
 	if _dash != null:
@@ -1114,16 +1313,14 @@ func _update_shake(speed: float, scroll_z: float, steering_angle: float) -> void
 				sin(scroll_z * 18.0) * (speed / SPEED_MAX) * 2.0 * shake_mult,
 				cos(scroll_z * 20.0) * (speed / SPEED_MAX) * 1.5 * shake_mult
 			)
-			if _watcher_impact_t > 0.0:
-				var t := _watcher_impact_t / WATCHER_IMPACT_TIME
-				var kick := t * t
-				wiper_jiggle.y += sin(t * 40.0) * 12.0 * kick
-				wiper_jiggle.x += cos(t * 35.0) * 8.0 * kick
-			elif _impact_t > 0.0:
-				var t := _impact_t / IMPACT_TIME
-				var kick := t * t
+			if watcher_t > 0.0:
+				var kick := watcher_t * watcher_t
+				wiper_jiggle.y += sin(watcher_t * 40.0) * 12.0 * kick
+				wiper_jiggle.x += cos(watcher_t * 35.0) * 8.0 * kick
+			elif rock_t > 0.0:
+				var kick := rock_t * rock_t
 				var ph := float(Time.get_ticks_msec()) * 0.055
-				wiper_jiggle += Vector2(sin(ph * 2.5), cos(ph * 3.0)) * (IMPACT_MAG * 0.8 * kick)
+				wiper_jiggle += Vector2(sin(ph * 2.5), cos(ph * 3.0)) * (SHAKE_DEFS["rock"]["mag"] * 0.8 * kick)
 			
 			_wiper_pivot_L.position = (Vector2(280.0, 450.0) + wiper_jiggle) * scale_inv
 			_wiper_pivot_R.position = (Vector2(720.0, 450.0) + wiper_jiggle) * scale_inv

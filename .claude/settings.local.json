@@ -3,7 +3,12 @@
     "allow": [
       "Bash(find /d/Git/LastRoad -type f -name *enemy* -o -name *적* -o -name *에너미*)",
       "Bash(ls -la /d/Git/LastRoad/*.md /d/Git/LastRoad/*.txt /d/Git/LastRoad/*.doc*)",
-      "Bash(find /d/Git/LastRoad -maxdepth 2 -type f \\\\\\(-name *.md -o -name *.txt -o -name *.doc -o -name *.docx \\\\\\))"
+      "Bash(find /d/Git/LastRoad -maxdepth 2 -type f \\\\\\(-name *.md -o -name *.txt -o -name *.doc -o -name *.docx \\\\\\))",
+      "Bash(grep -E \"\\\\.\\(gd|tscn\\)$\")",
+      "Bash(grep:*)",
+      "Bash(find:*)",
+      "Bash(python3:*)",
+      "Bash(ls:*)"
     ]
   }
 }

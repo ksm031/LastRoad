@@ -2,6 +2,7 @@ extends CanvasLayer
 class_name LootUI
 
 signal loot_ui_closed
+signal item_used(item_id: String)
 
 # ── 레이아웃 상수 ──────────────────────────────────────────
 const SLOT_W    := 58
@@ -16,6 +17,8 @@ const SEARCH_TIME := 0.10   # 슬롯 1개당 수색 시간 (초)
 
 # ── 데이터 참조 ───────────────────────────────────────────
 var inv: InventoryManager
+var meta: MetaProgression
+var _wreck_seed: int = -1
 
 # ── 폐차 상태 ─────────────────────────────────────────────
 var _wreck_cols: int = WRECK_COLS
@@ -37,7 +40,7 @@ var _held_from_idx: int = -1
 var _root        : Control
 var _trunk_slots : Array = []   # Control per trunk slot
 var _wreck_slots : Array = []   # Control per wreck slot
-var _drag_panel  : PanelContainer
+var _drag_panel  : Panel
 var _drag_label  : Label
 var _info_label  : Label
 var _tooltip_panel : PanelContainer
@@ -51,13 +54,35 @@ var _trunk_count_lbl: Label
 var _close_btn   : Button
 var _sort_btn    : Button
 
+var _title_lbl   : Label
+var _is_trunk_only : bool = false
+
 # ─────────────────────────────────────────────────────────
 func _ready() -> void:
 	layer = 12
 	_build_ui()
 
+# ── 외부에서 호출: 트렁크 전용 오픈 ───────────────────────
+func open_trunk() -> void:
+	_is_trunk_only = true
+	_title_lbl.text = "내 인벤토리"
+	_wreck_panel_bg.visible = false
+	_wreck_scroll_clip.visible = false
+	_search_lbl.visible = false
+	
+	_held_item = ""
+	_search_done = true
+	_refresh_trunk_ui()
+	_root.visible = true
+
 # ── 외부에서 호출: 폐차 오픈 ─────────────────────────────
 func open_wreck(wreck_seed: int) -> void:
+	_is_trunk_only = false
+	_title_lbl.text = "갓길 수색"
+	_wreck_panel_bg.visible = true
+	_wreck_scroll_clip.visible = true
+	_search_lbl.visible = true
+
 	_wreck_rows = 10 + (wreck_seed % 7)   # 10~16행
 	_active_state = inv.get_or_generate_wreck_state(wreck_seed, _wreck_cols, _wreck_rows)
 	_wreck_items = _active_state["items"]
@@ -104,7 +129,8 @@ func _process(delta: float) -> void:
 
 	if _search_done: return
 
-	_search_timer += delta
+	var loot_speed_mult := 1.25 if (meta and meta.has_perk("fast_loot")) else 1.0
+	_search_timer += delta * loot_speed_mult
 	_active_state["search_timer"] = _search_timer
 	if _search_timer >= SEARCH_TIME:
 		_search_timer -= SEARCH_TIME
@@ -154,12 +180,12 @@ func _build_ui() -> void:
 	_root.add_child(overlay)
 
 	# ── 제목 ──
-	var title := Label.new()
-	title.text = "갓길 수색"
-	title.position = Vector2(20, 12)
-	title.add_theme_font_size_override("font_size", 22)
-	title.add_theme_color_override("font_color", Color(0.95, 0.85, 0.5))
-	_root.add_child(title)
+	_title_lbl = Label.new()
+	_title_lbl.text = "갓길 수색"
+	_title_lbl.position = Vector2(20, 12)
+	_title_lbl.add_theme_font_size_override("font_size", 22)
+	_title_lbl.add_theme_color_override("font_color", Color(0.95, 0.85, 0.5))
+	_root.add_child(_title_lbl)
 
 	# 닫기 버튼
 	_close_btn = Button.new()
@@ -345,6 +371,11 @@ func _rebuild_wreck_grid() -> void:
 		)
 		_wreck_slots.append(s)
 		_wreck_grid_parent.add_child(s)
+		
+	# 새로 생성된 슬롯에 현재 상태(아이템 유무, 가려짐 등) 반영
+	for i in total:
+		_refresh_wreck_slot(i)
+		
 	_update_search_label()
 
 # ── 버리기 존 ────────────────────────────────────────────
@@ -454,7 +485,7 @@ func _refresh_trunk_ui() -> void:
 		_apply_slot_state(_trunk_slots[i], item_id if item_id != "" else "", true)
 		if item_id != "": used += 1
 	if _trunk_count_lbl:
-		_trunk_count_lbl.text = "%d/%d" % [used, InventoryManager.TRUNK_SIZE]
+		_trunk_count_lbl.text = "%d/%d" % [used, inv.trunk_size]
 
 func _refresh_wreck_slot(idx: int) -> void:
 	if idx >= _wreck_slots.size(): return
@@ -531,7 +562,7 @@ func _apply_slot_state(slot: Control, item_id: String, revealed: bool) -> void:
 func _find_trunk_anchor(idx: int) -> int:
 	var cr := idx / TRUNK_COLS
 	var cc := idx % TRUNK_COLS
-	for i in InventoryManager.TRUNK_SIZE:
+	for i in inv.trunk_size:
 		var other_id := str(inv.trunk[i])
 		if other_id == "": continue
 		var odata := inv.get_item_data(other_id)
@@ -589,16 +620,36 @@ func _on_slot_hover(panel_type: String, idx: int) -> void:
 func _on_slot_input(ev: InputEvent, panel_type: String, idx: int) -> void:
 	if not (ev is InputEventMouseButton): return
 	var mb := ev as InputEventMouseButton
-	# 큰 아이템의 덮인 영역이면 앵커로 리다이렉트
-	if panel_type == "trunk":
-		idx = _find_trunk_anchor(idx)
-	elif panel_type == "wreck":
-		idx = _find_wreck_anchor(idx)
+	
+	# 아이템을 집을 때만 앵커로 리다이렉트 (놓을 때는 클릭한 그 칸이 기준이 되어야 함)
+	var interaction_idx := idx
+	if _held_item == "":
+		if panel_type == "trunk":
+			interaction_idx = _find_trunk_anchor(idx)
+		elif panel_type == "wreck":
+			interaction_idx = _find_wreck_anchor(idx)
+
 	if mb.button_index == MOUSE_BUTTON_LEFT and mb.pressed:
-		_handle_click(panel_type, idx)
+		_handle_click(panel_type, interaction_idx)
 	elif mb.button_index == MOUSE_BUTTON_RIGHT and mb.pressed:
 		if _held_item == "":
-			_auto_transfer_item(panel_type, idx)
+			if _is_trunk_only:
+				_try_use_item(panel_type, interaction_idx)
+			else:
+				_auto_transfer_item(panel_type, interaction_idx)
+
+func _try_use_item(panel_type: String, idx: int) -> void:
+	if panel_type != "trunk": return
+	var item_id = str(inv.trunk[idx])
+	if item_id == "": return
+	
+	var data := inv.get_item_data(item_id)
+	if str(data.get("type", "")) == "consumable":
+		# 소모품 사용 후 제거
+		inv.trunk_remove(idx)
+		_refresh_trunk_ui()
+		_tooltip_panel.visible = false
+		item_used.emit(item_id)
 
 func _handle_click(panel_type: String, idx: int) -> void:
 	# 들고 있는 아이템이 없으면 집기
@@ -654,6 +705,22 @@ func _try_place(panel_type: String, idx: int) -> void:
 		_update_drag_vis()
 	elif panel_type == "wreck":
 		if not _can_fit_wreck(_held_item, idx):
+			var blocks := _get_wreck_blocking_items(_held_item, idx)
+			if blocks.size() == 1 and int(blocks[0]) != -1:
+				var blocking_idx : int = blocks[0]
+				var swap_item_id : String = _wreck_items[blocking_idx]
+				_wreck_items.erase(blocking_idx)
+				if _can_fit_wreck(_held_item, idx):
+					_wreck_items[idx] = _held_item
+					_held_item = swap_item_id
+					_held_from_type = "wreck"
+					_held_from_idx = blocking_idx
+					_refresh_wreck_slot(blocking_idx)
+					_refresh_wreck_slot(idx)
+					_update_drag_vis()
+					return
+				else:
+					_wreck_items[blocking_idx] = swap_item_id
 			_info_label.text = "공간이 부족하거나 가려진 구역입니다."
 			return
 		_wreck_items[idx] = _held_item
@@ -693,6 +760,26 @@ func _auto_transfer_item(panel_type: String, idx: int) -> void:
 		else:
 			_info_label.text = "트렁크에 공간이 없습니다."
 
+func _get_wreck_blocking_items(item_id: String, start_idx: int) -> Array:
+	var data := inv.get_item_data(item_id)
+	var sz : Array = data.get("size", [1, 1])
+	var w : int = sz[0]
+	var h : int = sz[1]
+	var r := start_idx / _wreck_cols
+	var c := start_idx % _wreck_cols
+	
+	if r + h > _wreck_rows or c + w > _wreck_cols: return [-1]
+	var blocks := []
+	for dr in h:
+		for dc in w:
+			var idx := (r + dr) * _wreck_cols + (c + dc)
+			if idx >= _revealed.size() or not _revealed[idx]: return [-1]
+			var anchor := _find_wreck_anchor(idx)
+			if _wreck_items.has(anchor):
+				if not blocks.has(anchor):
+					blocks.append(anchor)
+	return blocks
+
 func _can_fit_wreck(item_id: String, start_idx: int) -> bool:
 	var data := inv.get_item_data(item_id)
 	var sz : Array = data.get("size", [1, 1])
@@ -705,8 +792,8 @@ func _can_fit_wreck(item_id: String, start_idx: int) -> bool:
 		for dc in w:
 			var idx := (r + dr) * _wreck_cols + (c + dc)
 			if idx >= _revealed.size() or not _revealed[idx]: return false
-			if _wreck_items.has(idx) and idx != start_idx: return false
-			if _is_wreck_slot_covered_by_other(idx, start_idx): return false
+			if _wreck_items.has(idx): return false
+			if _is_wreck_slot_covered_by_other(idx, -1): return false
 	return true
 
 func _is_wreck_slot_covered_by_other(check_idx: int, ignore_idx: int) -> bool:

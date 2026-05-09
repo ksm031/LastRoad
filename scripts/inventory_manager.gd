@@ -1,12 +1,13 @@
 extends Node
 class_name InventoryManager
 
-const TRUNK_COLS := 5
-const TRUNK_ROWS := 4
-const TRUNK_SIZE := TRUNK_COLS * TRUNK_ROWS  # 20칸
+var trunk_cols := 5
+var trunk_rows := 4
+var trunk_size := 20
 
 # 트렁크: "" = 빈 슬롯
 var trunk: Array = []
+var money: int = 5000
 
 # 폐차 상태 캐싱: wreck_seed -> { items: Dictionary, revealed: Array, search_slot: int, search_timer: float, search_done: bool }
 var wreck_states: Dictionary = {}
@@ -14,9 +15,9 @@ var wreck_states: Dictionary = {}
 # ── 아이템 데이터베이스 ───────────────────────────────────
 # color: BGR hex string (Color() 생성용)
 const ITEM_DB := {
-	"fuel_can":    {"name": "기름통(10L)",    "type": "consumable", "value": 0,     "color": Color(0.78, 0.59, 0.12), "size": [2, 2]},
-	"patch_kit":   {"name": "타이어패치킷",   "type": "consumable", "value": 0,     "color": Color(0.43, 0.75, 0.27)},
-	"cigarette":   {"name": "담배",           "type": "consumable", "value": 0,     "color": Color(0.91, 0.85, 0.63)},
+	"fuel_can":    {"name": "기름통(10L)",    "type": "consumable", "value": 2500,  "color": Color(0.78, 0.59, 0.12), "size": [2, 2]},
+	"patch_kit":   {"name": "타이어패치킷",   "type": "consumable", "value": 1200,  "color": Color(0.43, 0.75, 0.27)},
+	"cigarette":   {"name": "담배",           "type": "consumable", "value": 800,   "color": Color(0.91, 0.85, 0.63)},
 	"scrap":       {"name": "고철덩어리",     "type": "junk",       "value": 300,   "color": Color(0.47, 0.47, 0.47)},
 	"aluminum":    {"name": "알루미늄캔",     "type": "junk",       "value": 500,   "color": Color(0.63, 0.63, 0.75)},
 	"copper_wire": {"name": "동선묶음",       "type": "junk",       "value": 1000,  "color": Color(0.75, 0.47, 0.20)},
@@ -37,9 +38,30 @@ const ITEM_DB := {
 }
 
 func _ready() -> void:
-	trunk.resize(TRUNK_SIZE)
-	for i in TRUNK_SIZE:
+	_init_trunk()
+
+func _init_trunk() -> void:
+	trunk.clear()
+	trunk.resize(trunk_size)
+	for i in trunk_size:
 		trunk[i] = ""
+
+func apply_meta(meta: MetaProgression) -> void:
+	trunk_rows = 4
+	if meta.has_perk("trunk_1"):     trunk_rows += 1
+	if meta.has_perk("vet_farmer"):  trunk_rows += 1
+	
+	trunk_size = trunk_cols * trunk_rows
+	
+	# 이미 아이템이 있는 경우 보존하면서 리사이즈
+	var old_trunk = trunk.duplicate()
+	trunk.clear()
+	trunk.resize(trunk_size)
+	for i in trunk_size:
+		if i < old_trunk.size():
+			trunk[i] = old_trunk[i]
+		else:
+			trunk[i] = ""
 
 # ── 폐차 드롭 생성 ────────────────────────────────────────
 # wreck_seed: 폐차 k 값 기반. 반환: 상태 딕셔너리
@@ -82,32 +104,43 @@ func get_or_generate_wreck_state(wreck_seed: int, wreck_cols: int, wreck_rows: i
 	var result: Dictionary = {}
 	var occupied: Array = []
 	
-	# 1. 대형 엔진(2x2) 먼저 배치 (경계 안넘어가게)
-	var engine_corners := []
-	for r in range(wreck_rows - 1):
-		for c in range(wreck_cols - 1):
-			engine_corners.append(r * wreck_cols + c)
-	engine_corners.shuffle()
-	
-	if engine_corners.size() > 0:
-		var corner : int = engine_corners[0]
-		result[corner] = "big_engine"
-		var cr := corner / wreck_cols
-		var cc := corner % wreck_cols
-		# 2x2 영역 점유 (다른 1x1 아이템이 안 들어가게)
-		for dr in 2:
-			for dc in 2:
-				occupied.append((cr + dr) * wreck_cols + (cc + dc))
+	dropped.insert(0, "big_engine") # 엔진 추가
 
-	# 2. 나머지 1x1 아이템 배치
-	var available: Array = []
-	for i in total_slots:
-		if not occupied.has(i):
-			available.append(i)
-	available.shuffle()
+	# 크기 순으로 정렬
+	dropped.sort_custom(func(a, b):
+		var da = get_item_data(a).get("size", [1, 1])
+		var db = get_item_data(b).get("size", [1, 1])
+		return (int(da[0]) * int(da[1])) > (int(db[0]) * int(db[1]))
+	)
 
-	for i in mini(dropped.size(), available.size()):
-		result[available[i]] = dropped[i]
+	for item_id in dropped:
+		var data := get_item_data(item_id)
+		var sz : Array = data.get("size", [1, 1])
+		var w : int = int(sz[0])
+		var h : int = int(sz[1])
+		
+		var candidates := []
+		for r in range(wreck_rows - h + 1):
+			for c in range(wreck_cols - w + 1):
+				var start_idx := r * wreck_cols + c
+				var can_fit := true
+				for dr in h:
+					for dc in w:
+						if occupied.has((r + dr) * wreck_cols + (c + dc)):
+							can_fit = false
+							break
+					if not can_fit: break
+				if can_fit:
+					candidates.append(start_idx)
+		
+		if candidates.size() > 0:
+			var start_idx : int = candidates[rng.randi() % candidates.size()]
+			result[start_idx] = item_id
+			var start_r := start_idx / wreck_cols
+			var start_c := start_idx % wreck_cols
+			for dr in h:
+				for dc in w:
+					occupied.append((start_r + dr) * wreck_cols + (start_c + dc))
 
 	var revealed_arr := []
 	revealed_arr.resize(total_slots)
@@ -131,11 +164,11 @@ func trunk_add(item_id: String) -> int:
 	var w : int = sz[0]
 	var h : int = sz[1]
 	
-	for r in range(TRUNK_ROWS - h + 1):
-		for c in range(TRUNK_COLS - w + 1):
-			if can_fit_item(item_id, r * TRUNK_COLS + c):
-				trunk[r * TRUNK_COLS + c] = item_id
-				return r * TRUNK_COLS + c
+	for r in range(trunk_rows - h + 1):
+		for c in range(trunk_cols - w + 1):
+			if can_fit_item(item_id, r * trunk_cols + c):
+				trunk[r * trunk_cols + c] = item_id
+				return r * trunk_cols + c
 	return -1
 
 func can_fit_item(item_id: String, start_idx: int) -> bool:
@@ -144,16 +177,16 @@ func can_fit_item(item_id: String, start_idx: int) -> bool:
 	var w : int = sz[0]
 	var h : int = sz[1]
 	
-	var start_r := start_idx / TRUNK_COLS
-	var start_c := start_idx % TRUNK_COLS
+	var start_r := start_idx / trunk_cols
+	var start_c := start_idx % trunk_cols
 	
-	if start_r + h > TRUNK_ROWS or start_c + w > TRUNK_COLS:
+	if start_r + h > trunk_rows or start_c + w > trunk_cols:
 		return false
 		
 	# 해당 영역이 다른 아이템의 '시각적 점유' 영역과 겹치는지 확인
 	for r in range(start_r, start_r + h):
 		for c in range(start_c, start_c + w):
-			var idx := r * TRUNK_COLS + c
+			var idx := r * trunk_cols + c
 			# 1. 해당 슬롯 자체에 아이템이 있는가?
 			if str(trunk[idx]) != "":
 				return false
@@ -169,15 +202,15 @@ func get_blocking_items(item_id: String, start_idx: int) -> Array:
 	var w : int = sz[0]
 	var h : int = sz[1]
 	
-	var start_r := start_idx / TRUNK_COLS
-	var start_c := start_idx % TRUNK_COLS
+	var start_r := start_idx / trunk_cols
+	var start_c := start_idx % trunk_cols
 	
-	if start_r + h > TRUNK_ROWS or start_c + w > TRUNK_COLS:
+	if start_r + h > trunk_rows or start_c + w > trunk_cols:
 		return [-1] # Out of bounds
 		
 	for r in range(start_r, start_r + h):
 		for c in range(start_c, start_c + w):
-			var idx := r * TRUNK_COLS + c
+			var idx := r * trunk_cols + c
 			if str(trunk[idx]) != "":
 				if not blocks.has(idx):
 					blocks.append(idx)
@@ -187,10 +220,10 @@ func get_blocking_items(item_id: String, start_idx: int) -> Array:
 	return blocks
 
 func _get_covering_item_idx(check_idx: int, ignore_idx: int = -1) -> int:
-	var cr := check_idx / TRUNK_COLS
-	var cc := check_idx % TRUNK_COLS
+	var cr := check_idx / trunk_cols
+	var cc := check_idx % trunk_cols
 	
-	for i in TRUNK_SIZE:
+	for i in trunk_size:
 		if i == ignore_idx: continue
 		var other_id := str(trunk[i])
 		if other_id == "": continue
@@ -199,21 +232,21 @@ func _get_covering_item_idx(check_idx: int, ignore_idx: int = -1) -> int:
 		var osz : Array = odata.get("size", [1, 1])
 		if int(osz[0]) == 1 and int(osz[1]) == 1: continue
 		
-		var orow := i / TRUNK_COLS
-		var ocol := i % TRUNK_COLS
+		var orow := i / trunk_cols
+		var ocol := i % trunk_cols
 		if cr >= orow and cr < orow + int(osz[1]) and cc >= ocol and cc < ocol + int(osz[0]):
 			return i
 	return -1
 
 func trunk_remove(slot_idx: int) -> String:
-	if slot_idx < 0 or slot_idx >= TRUNK_SIZE:
+	if slot_idx < 0 or slot_idx >= trunk_size:
 		return ""
 	var item := str(trunk[slot_idx])
 	trunk[slot_idx] = ""
 	return item
 
 func trunk_set(slot_idx: int, item_id: String) -> void:
-	if slot_idx >= 0 and slot_idx < TRUNK_SIZE:
+	if slot_idx >= 0 and slot_idx < trunk_size:
 		trunk[slot_idx] = item_id
 
 func is_trunk_full() -> bool:
@@ -233,7 +266,7 @@ func sort_trunk() -> void:
 			items.append(str(item))
 	
 	# 2. 트렁크 비우기
-	for i in TRUNK_SIZE:
+	for i in trunk_size:
 		trunk[i] = ""
 	
 	# 3. 큰 아이템부터 배치 (면적 내림차순 정렬)
@@ -250,9 +283,9 @@ func sort_trunk() -> void:
 	# 큰 아이템 먼저 배치
 	for item_id in big_items:
 		var placed := false
-		for r in TRUNK_ROWS:
-			for c in TRUNK_COLS:
-				var idx := r * TRUNK_COLS + c
+		for r in trunk_rows:
+			for c in trunk_cols:
+				var idx := r * trunk_cols + c
 				if can_fit_item(item_id, idx):
 					trunk[idx] = item_id
 					placed = true
@@ -261,9 +294,26 @@ func sort_trunk() -> void:
 	
 	# 4. 작은 아이템은 비어있고 덮이지 않은 슬롯에 배치
 	var si := 0
-	for i in TRUNK_SIZE:
+	for i in trunk_size:
 		if si >= small_items.size(): break
 		if str(trunk[i]) != "": continue
 		if _get_covering_item_idx(i) != -1: continue
 		trunk[i] = small_items[si]
 		si += 1
+# ── 판매 로직 ──────────────────────────────────────────
+func sell_all_junk(meta: MetaProgression = null) -> int:
+	var total_earned := 0
+	var bonus_mult := 1.10 if (meta and meta.has_perk("vet_farmer")) else 1.0
+	
+	for i in trunk.size():
+		var item_id = str(trunk[i])
+		if item_id == "": continue
+		
+		var data = get_item_data(item_id)
+		if data.get("type", "") == "junk":
+			var price = int(float(data.get("value", 0)) * bonus_mult)
+			total_earned += price
+			trunk[i] = ""
+			
+	money += total_earned
+	return total_earned

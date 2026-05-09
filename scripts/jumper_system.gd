@@ -1,16 +1,15 @@
 extends Node2D
 class_name LastRoadJumpers
+const BillboardManager = preload("res://scripts/billboard_manager.gd")
 
-# ── 상수 (road_renderer / watcher_system과 동일한 투영 모델) ─────
-const CAMERA_DEPTH   := 0.84
-const ROAD_HW_MAX    := 650.0
-const ROAD_BOTTOM_Y  := 500.0
-const HORIZON_Y_BASE := 300.0
+# ── 상수 (BillboardManager 투영 모델 사용) ─────
+# CAMERA_DEPTH, ROAD_HW_MAX 등은 BillboardManager에 정의됨
 
-# ── 스폰 튜닝 ────────────────────────────────────────────────
-const SPACING_Z      := 80.0    # 점퍼 간 최소 거리
-const SPAWN_CHANCE   := 0.10    # 스폰 확률 (와쳐보다 낮음)
-const VISIBLE_DZ_MIN := 0.05
+# ── 스폰 튜닝 (route_type에 따라 game_world에서 조정) ─────────
+var SPACING_Z      := 65.0    # 실제값은 spawn_config.gd에서 주입
+var SPAWN_CHANCE   := 0.15
+var seed_offset    := 0       # 스테이지마다 다른 배치를 위한 시드 오프셋
+const VISIBLE_DZ_MIN := 0.001
 const VISIBLE_DZ_MAX := 85.0
 
 # ── 충돌 튜닝 ────────────────────────────────────────────────
@@ -29,28 +28,6 @@ const IDLE_FPS       := 6.0
 const JUMP_ANIM_FPS  := 12.0
 const JUMP_FRAMES    := 6
 
-# ── 셰이더 ──────────────────────────────────────────────────
-const HEADLIGHT_SHADER := """
-shader_type canvas_item;
-uniform float light_height : hint_range(0.0, 1.0) = 0.0;
-uniform vec4 light_color : source_color = vec4(0.91, 0.78, 0.48, 1.0);
-uniform vec4 ambient_color : source_color = vec4(0.42, 0.42, 0.42, 1.0);
-uniform bool is_jumping = false;
-uniform float jump_t : hint_range(0.0, 1.0) = 0.0;
-void fragment() {
-	vec4 tex = texture(TEXTURE, UV);
-	float edge = 1.0 - light_height;
-	float lit = smoothstep(edge - 0.35, edge, UV.y);
-	if (is_jumping) {
-		float jump_unlit = smoothstep(jump_t - 0.15, jump_t, UV.y);
-		lit = min(lit, jump_unlit);
-	}
-	vec4 dark = tex * ambient_color;
-	vec4 bright = tex * light_color;
-	COLOR = mix(dark, bright, lit);
-	COLOR.a = tex.a;
-}
-"""
 
 
 
@@ -59,6 +36,7 @@ var scroll_z : float = 0.0
 var cam_x    : float = 0.0
 var hill_px  : float = 0.0
 var _curve_x : PackedFloat32Array = PackedFloat32Array()
+var _headlight_range : float = 1.0
 
 var _idle_textures : Array[Texture2D] = []
 var _jump_textures : Array[Texture2D] = []
@@ -67,10 +45,9 @@ var _hold_texture  : Texture2D
 var _anim_time : float = 0.0
 # k -> { until_z: float, hit_time: float, jump_done: bool }
 var _hit_info  : Dictionary = {}
-
-var _shader    : Shader
-var _sprites   : Array[Sprite2D] = []
-const POOL_SIZE := 8
+var _light_pool: LightMaterialPool
+var billboard_mgr: BillboardManager
+const POOL_SIZE := 15
 
 # 점프 애니메이션 완료 시 보닛 탑승 알림
 signal jumper_boarded
@@ -88,25 +65,14 @@ func _ready() -> void:
 			_jump_textures.append(t)
 
 	_hold_texture = load("res://Asset/Image/Character/jumper_hold_01.png") as Texture2D
+	_light_pool = LightMaterialPool.new(POOL_SIZE, _AMBIENT_NORMAL, _AMBIENT_DARK)
 
-	_shader = Shader.new()
-	_shader.code = HEADLIGHT_SHADER
+const _AMBIENT_NORMAL := Color(0.42, 0.42, 0.42, 1.0)
+const _AMBIENT_DARK   := Color(0.08, 0.08, 0.10, 1.0)
 
-	for i in POOL_SIZE:
-		var spr := Sprite2D.new()
-		spr.centered = false
-		spr.texture_filter = CanvasItem.TEXTURE_FILTER_NEAREST
-		spr.visible = false
-
-		var mat := ShaderMaterial.new()
-		mat.shader = _shader
-		mat.set_shader_parameter("light_height", 0.0)
-		mat.set_shader_parameter("light_color", Color(0.91, 0.78, 0.48, 1.0))
-		mat.set_shader_parameter("ambient_color", Color(0.42, 0.42, 0.42, 1.0))
-		spr.material = mat
-
-		add_child(spr)
-		_sprites.append(spr)
+func set_dark_mode(is_dark: bool) -> void:
+	if _light_pool:
+		_light_pool.set_dark_mode(is_dark)
 
 func _process(delta: float) -> void:
 	_anim_time += delta
@@ -124,12 +90,13 @@ func _process(delta: float) -> void:
 			jumper_boarded.emit()
 
 # ── 외부 업데이트 ────────────────────────────────────────────
-func update_state(p_scroll_z: float, p_lane_x: float, p_curve_x: PackedFloat32Array, p_hill_px: float) -> void:
+func update_state(p_scroll_z: float, p_lane_x: float, p_curve_x: PackedFloat32Array, p_hill_px: float, p_headlight_range: float = 1.0) -> void:
 	scroll_z = p_scroll_z
 	cam_x = p_lane_x
 	_curve_x = p_curve_x
 	hill_px = p_hill_px
-	_update_sprites()
+	_headlight_range = p_headlight_range
+	_update_billboards()
 
 # ── 충돌 체크 ────────────────────────────────────────────────
 func check_collision(vehicle: LastRoadVehicle) -> bool:
@@ -173,32 +140,14 @@ func _prune_hits() -> void:
 
 # ── 결정적 점퍼 생성 (와쳐와 다른 시드) ──────────────────────
 func _jumper_at_k(k: int) -> Dictionary:
-	if k == 1:
-		return { "k": k, "lane": 0, "wz": 15.0 }
-	var r := _rand01(k * 17239 + 11)
+	var r := BillboardManager.get_rand01(k * 17239 + 11, seed_offset)
 	if r > SPAWN_CHANCE:
 		return {}
-	var lane := int(floor(_rand01(k * 17239 + 67) * 3.0)) - 1
-	var wz := float(k) * SPACING_Z + 15.0 + _rand01(k * 17239 + 113) * 15.0
+	var lane := int(floor(BillboardManager.get_rand01(k * 17239 + 67, seed_offset) * 3.0)) - 1
+	var wz := float(k) * SPACING_Z + 15.0 + BillboardManager.get_rand01(k * 17239 + 113, seed_offset) * 15.0
 	return { "k": k, "lane": lane, "wz": wz }
 
 
-func _rand01(seed_val: int) -> float:
-	var h := int((seed_val * 1103515245 + 12345) & 0x7fffffff)
-	return float(h & 0xFFFF) / 65535.0
-
-func _curve_at_depth(depth: float) -> float:
-	var n := _curve_x.size()
-	if n <= 1:
-		return 0.0
-	var idx := clampi(int(round((1.0 - depth) * float(n - 1))), 0, n - 1)
-	return _curve_x[idx]
-
-func _z_to_light_height(depth: float) -> float:
-	if depth < 0.10:
-		return 0.0
-	var t := clampf((depth - 0.10) / 0.90, 0.0, 1.0)
-	return sqrt(t)
 
 func _get_idle_texture() -> Texture2D:
 	if _idle_textures.is_empty():
@@ -207,8 +156,11 @@ func _get_idle_texture() -> Texture2D:
 	return _idle_textures[IDLE_SEQUENCE[frame_idx]]
 
 # ── 스프라이트 업데이트 ──────────────────────────────────────
-func _update_sprites() -> void:
-	var hy := HORIZON_Y_BASE + hill_px
+func _update_billboards() -> void:
+	if billboard_mgr == null:
+		return
+		
+
 	var entries : Array = []
 	var k_min := int(floor((scroll_z + VISIBLE_DZ_MIN) / SPACING_Z))
 	var k_max := int(ceil((scroll_z + VISIBLE_DZ_MAX) / SPACING_Z))
@@ -227,25 +179,21 @@ func _update_sprites() -> void:
 		if jump_done:
 			continue
 
-		if not is_jumping and (dz < VISIBLE_DZ_MIN or dz > VISIBLE_DZ_MAX):
+		if not is_jumping and (dz <= 0.0 or dz > VISIBLE_DZ_MAX):
 			continue
 
 		var render_dz := dz
 		if is_jumping and dz < 0.84:
 			render_dz = 0.84
 
-		var depth: float = CAMERA_DEPTH / render_dz
-		if depth < 0.02:
-			continue
-
-		var road_hw := depth * ROAD_HW_MAX
-		var cx_curve := _curve_at_depth(depth)
-		var road_cx := 640.0 + cx_curve - cam_x * depth * 320.0
-		var ground_y := hy + depth * (ROAD_BOTTOM_Y - hy)
+		var proj := BillboardManager.calculate_projection(render_dz, cam_x, _curve_x, hill_px, _headlight_range)
+		var depth: float = proj.depth
 
 		var lane := int(o["lane"])
-		var lane_off := float(lane) * road_hw * 0.42
-		var x := road_cx + lane_off
+		var lane_off: float = float(lane) * float(proj.road_hw) * 0.42
+		var x: float = float(proj.road_cx) + lane_off
+
+		var current_ground_y: float = float(proj.ground_y)
 
 		# 텍스처 결정: 점프 애니 > idle
 		var tex_to_use : Texture2D
@@ -266,7 +214,7 @@ func _update_sprites() -> void:
 				x = lerpf(x, 640.0, t)
 
 				# 점프 4, 5, 6 프레임 등에서 자연스럽게 높이를 조절하기 위해 아크를 더합니다.
-				ground_y -= sin(t * PI) * 110.0 * depth
+				current_ground_y -= sin(t * PI) * 110.0 * depth
 			else:
 				tex_to_use = _hold_texture
 		else:
@@ -276,10 +224,10 @@ func _update_sprites() -> void:
 		if tex_to_use == null:
 			continue
 
-		var h := depth * JUMPER_BASE_H * scale_mult
-		var w := h * float(tex_to_use.get_width()) / maxf(float(tex_to_use.get_height()), 1.0)
-		var fade := 1.0 - clampf((dz - VISIBLE_DZ_MAX * 0.75) / (VISIBLE_DZ_MAX * 0.25), 0.0, 1.0)
-		var light_h := _z_to_light_height(depth)
+		var h: float = depth * JUMPER_BASE_H * scale_mult
+		var w: float = h * float(tex_to_use.get_width()) / maxf(float(tex_to_use.get_height()), 1.0)
+		var fade: float = 1.0 - clampf((dz - VISIBLE_DZ_MAX * 0.75) / (VISIBLE_DZ_MAX * 0.25), 0.0, 1.0)
+		var light_h: float = proj.light_h
 
 		var jump_t: float = 0.0
 		if is_jumping:
@@ -290,31 +238,19 @@ func _update_sprites() -> void:
 
 
 		entries.append({
-			"depth": depth, "x": x, "y": ground_y,
+			"depth": depth, "x": x, "y": current_ground_y,
 			"w": w, "h": h, "fade": fade,
 			"light_h": light_h, "tex": tex_to_use,
 			"is_jumping": is_jumping,
 			"jump_t": jump_t
 		})
 
-
-	entries.sort_custom(func(a, b): return a.depth < b.depth)
-
-	for i in POOL_SIZE:
-		if i < entries.size():
-			var e = entries[i]
-			var spr := _sprites[i]
-			spr.visible = true
-			spr.texture = e.tex
-			spr.scale = Vector2(e.w / float(e.tex.get_width()), e.h / float(e.tex.get_height()))
-			spr.position = Vector2(e.x - e.w * 0.5, e.y - e.h * 0.78)
-			spr.modulate.a = e.fade
-			spr.z_index = int(e.depth * 100.0)
-
-			var mat := spr.material as ShaderMaterial
-			if mat:
-				mat.set_shader_parameter("light_height", e.light_h)
-				mat.set_shader_parameter("is_jumping", bool(e["is_jumping"]))
-				mat.set_shader_parameter("jump_t", float(e["jump_t"]))
-		else:
-			_sprites[i].visible = false
+	if _light_pool:
+		_light_pool.reset()
+		
+	for i in range(entries.size()):
+		var e = entries[i]
+		var mat := _light_pool.get_material(e.light_h, bool(e["is_jumping"]), float(e["jump_t"])) if _light_pool else null
+		
+		var rect := Rect2(e.x - e.w * 0.5, e.y - e.h * 0.78, e.w, e.h)
+		billboard_mgr.add_entry(e.depth, rect, e.tex, e.fade, mat, Color.WHITE, false, float(e.light_h), float(e.y))

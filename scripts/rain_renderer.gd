@@ -1,8 +1,5 @@
 extends Node2D
 
-const SCREEN_W := 1280.0
-const SCREEN_H := 720.0
-
 # ── 공중 빗줄기 (차창 밖 비) ────────────────────────────────
 const N_AIR_DROPS   := 250
 const AIR_SPEED     := 720.0
@@ -63,8 +60,8 @@ func _ready() -> void:
 	_ry.resize(N_AIR_DROPS)
 	_rs.resize(N_AIR_DROPS)
 	for i in N_AIR_DROPS:
-		_rx[i] = randf() * SCREEN_W
-		_ry[i] = randf() * SCREEN_H
+		_rx[i] = randf() * BillboardManager.SCREEN_W
+		_ry[i] = randf() * BillboardManager.SCREEN_H
 		_rs[i] = 0.55 + randf() * 0.90
 
 	_dx.resize(MAX_DROPS)
@@ -78,10 +75,10 @@ func _ready() -> void:
 
 	_shader_mat = ShaderMaterial.new()
 	_shader_mat.shader = load("res://scripts/windshield_glass.gdshader")
-	_shader_mat.set_shader_parameter("screen_size", Vector2(SCREEN_W, SCREEN_H))
+	_shader_mat.set_shader_parameter("screen_size", Vector2(BillboardManager.SCREEN_W, BillboardManager.SCREEN_H))
 	
 	_mask_vp = SubViewport.new()
-	_mask_vp.size = Vector2(SCREEN_W, SCREEN_H)
+	_mask_vp.size = Vector2(BillboardManager.SCREEN_W, BillboardManager.SCREEN_H)
 	_mask_vp.disable_3d = true
 	_mask_vp.transparent_bg = false
 	_mask_vp.render_target_clear_mode = SubViewport.CLEAR_MODE_NEVER
@@ -119,7 +116,7 @@ func _ready() -> void:
 
 
 func _on_glass_draw() -> void:
-	_glass.draw_rect(Rect2(0.0, 0.0, SCREEN_W, SCREEN_H), Color.WHITE)
+	_glass.draw_rect(Rect2(0.0, 0.0, BillboardManager.SCREEN_W, BillboardManager.SCREEN_H), Color.WHITE)
 
 
 # ── 공개 API ────────────────────────────────────────────────
@@ -129,15 +126,32 @@ func start_rain() -> void:
 	_glass.visible = true
 
 
+## 클리어 연출용: 빗줄기는 유지하되 성애·물방울만 즉시 제거
+func hide_glass_effects() -> void:
+	for i in MAX_DROPS:
+		_dr[i] = 0.0
+	_push_drops_to_shader()
+	_mask_vp.render_target_clear_mode = SubViewport.CLEAR_MODE_ALWAYS
+	await get_tree().process_frame
+	_mask_vp.render_target_clear_mode = SubViewport.CLEAR_MODE_NEVER
+	_bb.visible = false
+	_glass.visible = false
+
+
 func stop_rain() -> void:
 	is_raining = false
 	for i in MAX_DROPS:
 		_dr[i] = 0.0
 	_push_drops_to_shader()
 	_shader_mat.set_shader_parameter("wet_amount", 0.0)
+	# 성애 마스크 초기화 — CLEAR_MODE_NEVER이므로 한 프레임만 ALWAYS로 전환해 클리어
+	_mask_vp.render_target_clear_mode = SubViewport.CLEAR_MODE_ALWAYS
+	await get_tree().process_frame
+	_mask_vp.render_target_clear_mode = SubViewport.CLEAR_MODE_NEVER
 	_bb.visible = false
 	_glass.visible = false
 	queue_redraw()
+	_air_drops_layer.queue_redraw()
 
 
 ## hud의 와이퍼 피벗 위치/현재 각도를 매 프레임 전달받음.
@@ -174,7 +188,7 @@ func _process(delta: float) -> void:
 func _on_fog_add_draw() -> void:
 	if not is_raining: return
 	# 2.0초 동안 완전히 하얗게(1.0) 되려면 초당 1/2.0씩 더함
-	_fog_adder.draw_rect(Rect2(0, 0, SCREEN_W, SCREEN_H), Color(1, 1, 1, _current_delta / 2.0))
+	_fog_adder.draw_rect(Rect2(0, 0, BillboardManager.SCREEN_W, BillboardManager.SCREEN_H), Color(1, 1, 1, _current_delta / 2.0))
 
 func _on_wiper_erase_draw() -> void:
 	if not is_raining: return
@@ -207,7 +221,7 @@ func _update_air(delta: float) -> void:
 	
 	# 속도에 비례하는 퍼짐 효과 (차가 빠를수록 좌우로 비가 갈라짐)
 	var spread_factor := vehicle_speed * 0.015
-	var center_x := SCREEN_W * 0.5
+	var center_x := BillboardManager.SCREEN_W * 0.5
 	
 	for i in N_AIR_DROPS:
 		var x := _rx[i]
@@ -224,9 +238,9 @@ func _update_air(delta: float) -> void:
 		_ry[i] += vy * delta
 		
 		# 화면 밖으로 나가면 다시 저 멀리 위에서 떨어지도록 스폰
-		if _ry[i] > SCREEN_H + 15.0 or _rx[i] < -200.0 or _rx[i] > SCREEN_W + 200.0:
+		if _ry[i] > BillboardManager.SCREEN_H + 15.0 or _rx[i] < -200.0 or _rx[i] > BillboardManager.SCREEN_W + 200.0:
 			# 기본 스폰 (위에서 아래로)
-			_rx[i] = randf() * SCREEN_W
+			_rx[i] = randf() * BillboardManager.SCREEN_W
 			_ry[i] = randf_range(-150.0, -10.0)
 
 
@@ -241,8 +255,8 @@ func _spawn_drops(delta: float) -> void:
 func _spawn_one() -> void:
 	for i in MAX_DROPS:
 		if _dr[i] < 0.01:
-			_dx[i] = randf() * SCREEN_W
-			_dy[i] = randf() * SCREEN_H
+			_dx[i] = randf() * BillboardManager.SCREEN_W
+			_dy[i] = randf() * BillboardManager.SCREEN_H
 			var roll := randf()
 			if roll < 0.40:
 				_dr[i] = 1.5 + randf() * 2.0     # 1단계 (가장 작은 크기, 1.5 ~ 3.5)
@@ -283,7 +297,7 @@ func _update_drops(delta: float) -> void:
 			_dstretch[i] = lerpf(_dstretch[i], 1.0, clampf(delta * 2.5, 0.0, 1.0))
 
 		# 화면 밖
-		if _dy[i] > SCREEN_H + 50.0:
+		if _dy[i] > BillboardManager.SCREEN_H + 50.0:
 			_dr[i] = 0.0
 
 
@@ -375,7 +389,7 @@ func _draw_air_drops(target: CanvasItem, alpha_mult: float) -> void:
 	var vy_base := cos(lean) * AIR_SPEED
 	
 	var spread_factor := vehicle_speed * 0.015
-	var center_x := SCREEN_W * 0.5
+	var center_x := BillboardManager.SCREEN_W * 0.5
 	
 	for i in N_AIR_DROPS:
 		var x := _rx[i]
@@ -391,7 +405,7 @@ func _draw_air_drops(target: CanvasItem, alpha_mult: float) -> void:
 		var ex := vx / v_len if v_len > 0.0 else 0.0
 		var ey := vy / v_len if v_len > 0.0 else 1.0
 		
-		var t := clampf(y / SCREEN_H, 0.0, 1.0)
+		var t := clampf(y / BillboardManager.SCREEN_H, 0.0, 1.0)
 		var a := (0.22 + t * 0.38 + (sp - 0.55) * 0.12) * alpha_mult
 		var ln := AIR_LEN * (0.5 + t * 0.7 + (sp - 0.55) * 0.4)
 		
@@ -406,7 +420,11 @@ func _draw_air_drops(target: CanvasItem, alpha_mult: float) -> void:
 		)
 
 func _draw() -> void:
+	if not is_raining:
+		return
 	_draw_air_drops(self, 1.0)
 
 func _on_air_drops_draw() -> void:
+	if not is_raining:
+		return
 	_draw_air_drops(_air_drops_layer, 0.3)

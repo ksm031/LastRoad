@@ -1,17 +1,13 @@
 extends Node2D
 
-# ── 화면 상수 ────────────────────────────────────────────────
-const SCREEN_W  := 1280
-const SCREEN_H  := 720
-const HORIZON_Y := 300
+# 화면/도로 공통 상수는 BillboardManager에 정의됨
 
 # ── 노드 참조 ────────────────────────────────────────────────
-var _road    : Node2D
+var _road: Node2D
+var _billboard_mgr: BillboardManager
+
 var _trees   : Node2D
-var _sky_a   : Sprite2D
-var _sky_b   : Sprite2D
-var _mtn_a   : Sprite2D
-var _mtn_b   : Sprite2D
+
 var _vehicle: LastRoadVehicle
 var _hud     : CanvasLayer
 var _rain_layer : CanvasLayer
@@ -34,7 +30,7 @@ const JUMPER_ESCAPE_FILL_RATE := 40.0  # (조향 변화/최대조향) × 속도�
 
 var _prev_steering : float = 0.0
 
-var _monster_distance: float = 60.0  # 초기 괴물 간격 (세계 단위)
+var _monster_distance: float = 350.0  # 초기 괴물 간격 (세계 단위)
 var _sanity_ratio: float = 1.0        # 정신력 (1.0 = 정상, 0.0 = 패닉)
 
 # ── 스테이지 진행 시스템 ─────────────────────────────────────
@@ -45,27 +41,52 @@ const TOTAL_STAGES  := 6
 var current_stage     : int   = 1
 var stage_start_z     : float = 0.0     # 스테이지 시작 시점의 scroll_z
 
-# 게임 상태: "playing", "stage_clear", "game_over"
-var _game_state       : String = "playing"
+# 게임 상태: "main_menu", "playing", "stage_clear", "stage_exit", "game_over", "maintenance"
+var _game_state       : String = "main_menu"
 var _state_timer      : float = 0.0
 const STAGE_CLEAR_DURATION := 3.0
 const GAMEOVER_FADE_DURATION := 1.5
+const RETURN_TO_MENU_DELAY := 4.0   # 게임오버/클리어 후 메뉴 복귀까지 대기 시간
+
+# ── 메인 메뉴 ──
+var _menu_layer : CanvasLayer
+var _menu_container : Control
+
+# ── 메타 진행 / 강화 ──
+var _meta : MetaProgression
+var _upgrades : VehicleUpgradeSystem
+var _skill_tree_ui : Node  # SkillTreeUI
+var _stages_cleared_this_run : int = 0
+
+# ── 스테이지 클리어 → 상점 전환 연출 ──
+const EXIT_DRIVE_DURATION := 3.0  # 차가 도로를 따라 멀어지는 시간
+const EXIT_FADE_DURATION  := 1.2  # 페이드 아웃 시간
+var _exit_fade_rect: ColorRect
+var _exit_car_tex: Texture2D
+var _exit_car_dz: float = 2.0     # 카메라로부터의 거리 (세계 단위, 점점 증가)
+var _exit_cam_tilt: float = 0.0   # 카메라 틸트 (하늘을 올려다보는 효과, 픽셀 단위)
 
 # ── 배경 무한 스크롤 (코너에서만 누적) ────────────────────────
-var _sky_tile_w := 1.0
-var _mtn_tile_w := 1.0
-var _sky_scroll := 0.0
-var _mtn_scroll := 0.0
-const CORNER_BG_K_THRESH := 0.0035
-const BG_MTN_SPEED       := 0.38
-const BG_SKY_VS_MTN      := 0.32
-const MTN_Y_OFFSET       := 22.0  # 산맥을 조금 내려 지평선 틈 가리기
 
-# ── 언덕 시 배경 세로 패럴랙스 (숨쉬는 느낌 방지: 스무딩) ───────
-const MTN_H_PX           := 130.0
-const MTN_HILL_FACTOR    := 0.18  # 언덕 픽셀의 일부만 산이 따라옴
-const SKY_HILL_FACTOR    := 0.06  # 하늘은 더 느리게
-const BG_Y_SMOOTH_SPEED  := 6.0   # 클수록 빠르게 목표로 수렴
+var _sky_scroll    := 0.0
+var _mtn_scroll    := 0.0
+var _forest_scroll := 0.0
+const CORNER_BG_K_THRESH  := 0.0035
+const BG_MTN_SPEED        := 0.38
+const BG_SKY_VS_MTN       := 0.32
+const BG_FOREST_VS_MTN    := 1.85  # 숲은 산보다 가까우므로 더 빠르게
+const MTN_Y_OFFSET        := 22.0
+
+# ── 언덕 시 배경 세로 패럴랙스 ──────────────────────────────────
+# 거리 순서: 하늘(멀) < 산(중원) < 숲(중경) — 가까울수록 지평선을 더 많이 따라감
+const MTN_H_PX            := 130.0
+const FOREST_H_PX         := 90.0   # 화면에서 숲이 차지할 높이(px)
+const FOREST_Y_OFFSET     := 16.0   # 지평선 위 약간 겹쳐 틈 방지
+const SKY_HILL_FACTOR     := 0.08    # 원경은 거의 고정
+const MTN_HILL_FACTOR     := 0.35
+const FOREST_HILL_FACTOR  := 0.85    # 중경은 지평선 이동을 더 민첩하게 따라감
+const BG_Y_SMOOTH_SPEED   := 15.0    # 지연(Lag)을 줄이기 위해 속도 상향
+const SKY_EXTRA_PX        := 80.0
 
 const _RoadScript    = preload("res://scripts/road_renderer.gd")
 const _TreeScript    = preload("res://scripts/tree_renderer.gd")
@@ -78,11 +99,18 @@ const _ScavengingScript = preload("res://scripts/scavenging_system.gd")
 const _JumperScript  = preload("res://scripts/jumper_system.gd")
 const _InvMgrScript  = preload("res://scripts/inventory_manager.gd")
 const _LootUIScript  = preload("res://scripts/loot_ui.gd")
+const _ShopUIScript  = preload("res://scripts/shop_ui.gd")
+const _MetaScript    = preload("res://scripts/meta_progression.gd")
+const _BillboardMgrScript = preload("res://scripts/billboard_manager.gd")
+const _SkillTreeScript = preload("res://scripts/skill_tree_ui.gd")
 
-var _mtn_base_y: float = 0.0
-var _sky_base_y: float = 0.0
-var _mtn_y: float = 0.0
-var _sky_y: float = 0.0
+var _shop_ui: Node
+var _mtn_base_y    : float = 0.0
+var _sky_base_y    : float = 0.0
+var _forest_base_y : float = 0.0
+var _mtn_y         : float = 0.0
+var _sky_y         : float = 0.0
+var _forest_y      : float = 0.0
 
 var _debug_stop_monster: bool = false
 
@@ -103,17 +131,35 @@ func _ready() -> void:
 	
 	_build_sky_tiled()
 	_build_mountain_tiled()
+	_build_forest_tiled()
 	_road    = _RoadScript.new();    add_child(_road)
-	_scavenging = _ScavengingScript.new(); add_child(_scavenging)
+	_billboard_mgr = _BillboardMgrScript.new()
+	add_child(_billboard_mgr)
+
+	_scavenging = _ScavengingScript.new()
+	_scavenging.billboard_mgr = _billboard_mgr
+	add_child(_scavenging)
+
 	_trees   = _TreeScript.new();
 	_trees.scavenging_sys = _scavenging
+	_trees.billboard_mgr = _billboard_mgr
 	add_child(_trees)
-	_watchers = _WatcherScript.new(); add_child(_watchers)
+
+	_watchers = _WatcherScript.new()
+	_watchers.billboard_mgr = _billboard_mgr
+	add_child(_watchers)
+
 	_jumpers  = _JumperScript.new()
 	_jumpers.jumper_boarded.connect(_on_jumper_boarded)
+	_jumpers.billboard_mgr = _billboard_mgr
 	add_child(_jumpers)
-	_obstacles = _ObstacleScript.new(); add_child(_obstacles)
+
+	_obstacles = _ObstacleScript.new()
+	_obstacles.billboard_mgr = _billboard_mgr
+	add_child(_obstacles)
+
 	_vehicle = _VehicleScript.new(); add_child(_vehicle)
+	_vehicle.fuel_depleted.connect(func(): _hud.on_fuel_depleted())
 	# rain은 화면 고정이어야 하므로 CanvasLayer에 올려 카메라 줌/패럴랙스 영향 차단
 	_rain_layer = CanvasLayer.new()
 	_rain_layer.layer = 1               # hud와 같은 레이어지만 트리 상 먼저라 아래 렌더
@@ -122,16 +168,45 @@ func _ready() -> void:
 	_rain_layer.add_child(_rain)
 	_hud  = _HudScript.new();       add_child(_hud)
 	_hud.loot_prompt_clicked.connect(_on_loot_prompt_clicked)
-	_rain.start_rain()
 
 	# ── 인벤토리 / 루팅 UI ──
+	# ── 메타 진행 / 강화 (가장 먼저!) ──
+	_meta = _MetaScript.new()
+	add_child(_meta)
+	
 	_inv_mgr = _InvMgrScript.new()
+	_inv_mgr.apply_meta(_meta)
 	add_child(_inv_mgr)
+	
 	_loot_ui = _LootUIScript.new()
 	_loot_ui.inv = _inv_mgr
+	_loot_ui.meta = _meta
 	add_child(_loot_ui)
 	_loot_ui.loot_ui_closed.connect(func(): _hud.hide_loot_prompt())
+	_loot_ui.item_used.connect(_on_item_used)
 	_hud.loot_ui = _loot_ui
+	
+	_upgrades = VehicleUpgradeSystem.new()
+	add_child(_upgrades)
+	
+	# ── 퍽 효과 적용 (시작 정신력) ──
+	if _meta.has_perk("strong_heart"):
+		_sanity_ratio = 1.15
+	else:
+		_sanity_ratio = 1.0
+	_skill_tree_ui = _SkillTreeScript.new()
+	_skill_tree_ui.meta = _meta
+	_skill_tree_ui.closed.connect(_on_skill_tree_closed)
+	add_child(_skill_tree_ui)
+
+	# ── 정비소 UI ──
+	_shop_ui = _ShopUIScript.new()
+	_shop_ui.inv = _inv_mgr
+	_shop_ui.meta = _meta
+	_shop_ui.vehicle = _vehicle
+	_shop_ui.depart_requested.connect(_on_shop_depart_requested)
+	add_child(_shop_ui)
+	_hud.shop_ui = _shop_ui
 
 	_camera = Camera2D.new()
 	_camera.position = Vector2(640.0, 360.0)
@@ -139,67 +214,116 @@ func _ready() -> void:
 
 	_hud.follow_viewport_enabled = true
 
-# ── 하늘 (2타일 무한 가로 스크롤) ────────────────────────────
+	# 스테이지 1 초기 배치도 매 플레이마다 다르게
+	_apply_route_modifiers("normal")
+
+	# ── 메인 메뉴 ──
+	_build_main_menu()
+	_show_main_menu()
+
+var _sky_sprite    : Sprite2D
+var _mtn_sprite    : Sprite2D
+var _forest_sprite : Sprite2D
+var _sky_sc_x    : float = 1.0
+var _mtn_sc_x    : float = 1.0
+var _forest_sc_x : float = 1.0
+
+# ── 하늘 (무한 가로 스크롤) ────────────────────────────
 func _build_sky_tiled() -> void:
 	var tex := load("res://Asset/Image/sky.png") as Texture2D
 	if tex == null:
 		return
-	var sc := Vector2(
-		float(SCREEN_W) / float(tex.get_width()),
-		float(HORIZON_Y) / float(tex.get_height())
-	)
-	_sky_tile_w = float(tex.get_width()) * sc.x
-	_sky_a = Sprite2D.new()
-	_sky_b = Sprite2D.new()
-	for s in [_sky_a, _sky_b]:
-		s.texture = tex
-		s.centered = false
-		s.texture_filter = CanvasItem.TEXTURE_FILTER_LINEAR
-		s.scale = sc
-		s.position = Vector2(0.0, 0.0)
-		add_child(s)
-	_sky_b.position.x = _sky_tile_w
-	_apply_pair_scroll(_sky_a, _sky_b, _sky_scroll, _sky_tile_w)
-	_sky_base_y = 0.0
+	# 하늘을 BillboardManager.HORIZON_Y + SKY_EXTRA_PX 높이로 스케일 — 언덕 이동 시 상하 여유분 확보
+	var target_sc_y := float(BillboardManager.HORIZON_Y + SKY_EXTRA_PX) / float(tex.get_height())
+	var sc := Vector2(target_sc_y, target_sc_y)
+
+	_sky_sc_x = sc.x
+	_sky_sprite = Sprite2D.new()
+	_sky_sprite.texture = tex
+	_sky_sprite.centered = false
+	_sky_sprite.texture_filter = CanvasItem.TEXTURE_FILTER_LINEAR
+	_sky_sprite.texture_repeat = CanvasItem.TEXTURE_REPEAT_ENABLED
+	_sky_sprite.region_enabled = true
+	_sky_sprite.region_rect = Rect2(0.0, 1.0, BillboardManager.SCREEN_W / sc.x, float(tex.get_height()) - 2.0)
+	_sky_sprite.scale = sc
+	# 여유분 절반을 위로 올려서 상하 동등하게 여백 확보
+	var base_y := -SKY_EXTRA_PX * 0.5
+	_sky_sprite.position = Vector2(0.0, base_y)
+	add_child(_sky_sprite)
+	_sky_base_y = base_y
 	_sky_y = _sky_base_y
 
-# ── 산 실루엣 (2타일 무한 가로 스크롤) ───────────────────────
+# ── 산 실루엣 (무한 가로 스크롤) ───────────────────────
 func _build_mountain_tiled() -> void:
 	var tex := load("res://Asset/Image/mountain.png") as Texture2D
 	if tex == null:
 		return
 	var mtn_h := MTN_H_PX
 	var sc := Vector2(
-		float(SCREEN_W) / float(tex.get_width()),
+		float(BillboardManager.SCREEN_W) / float(tex.get_width()),
 		mtn_h / float(tex.get_height())
 	)
-	_mtn_tile_w = float(tex.get_width()) * sc.x
-	var y0 := float(HORIZON_Y) - mtn_h + MTN_Y_OFFSET
+	_mtn_sc_x = sc.x
+	var y0 := float(BillboardManager.HORIZON_Y) - mtn_h + MTN_Y_OFFSET
 	_mtn_base_y = y0
 	_mtn_y = _mtn_base_y
-	_mtn_a = Sprite2D.new()
-	_mtn_b = Sprite2D.new()
-	for s in [_mtn_a, _mtn_b]:
-		s.texture = tex
-		s.centered = false
-		s.texture_filter = CanvasItem.TEXTURE_FILTER_LINEAR
-		s.scale = sc
-		s.position = Vector2(0.0, y0)
-		add_child(s)
-	_mtn_b.position.x = _mtn_tile_w
-	_apply_pair_scroll(_mtn_a, _mtn_b, _mtn_scroll, _mtn_tile_w)
+	
+	_mtn_sprite = Sprite2D.new()
+	_mtn_sprite.texture = tex
+	_mtn_sprite.centered = false
+	_mtn_sprite.texture_filter = CanvasItem.TEXTURE_FILTER_LINEAR
+	_mtn_sprite.texture_repeat = CanvasItem.TEXTURE_REPEAT_ENABLED
+	_mtn_sprite.region_enabled = true
+	# Y축은 1픽셀씩 여백을 줘서 상하 반복 블리딩 방지
+	_mtn_sprite.region_rect = Rect2(0.0, 1.0, BillboardManager.SCREEN_W / sc.x, float(tex.get_height()) - 2.0)
+	_mtn_sprite.scale = sc
+	_mtn_sprite.position = Vector2(0.0, y0)
+	add_child(_mtn_sprite)
 
-
-func _apply_pair_scroll(a: Sprite2D, b: Sprite2D, scroll: float, tile_w: float) -> void:
-	if tile_w <= 0.0 or a == null or b == null:
+func _build_forest_tiled() -> void:
+	var tex := load("res://Asset/Image/forest.png") as Texture2D
+	if tex == null:
 		return
-	var s := fposmod(scroll, tile_w)
-	var y0 := a.position.y
-	a.position = Vector2(-s, y0)
-	b.position = Vector2(tile_w - s, y0)
+	var sc := Vector2(
+		float(BillboardManager.SCREEN_W) / float(tex.get_width()),
+		FOREST_H_PX / float(tex.get_height())
+	)
+	_forest_sc_x = sc.x
+	# 숲 하단을 지평선에 맞춤 (FOREST_Y_OFFSET 만큼 내려서 틈 방지)
+	var y0 := float(BillboardManager.HORIZON_Y) - FOREST_H_PX + FOREST_Y_OFFSET
+	_forest_base_y = y0
+	_forest_y = y0
+
+	_forest_sprite = Sprite2D.new()
+	_forest_sprite.texture = tex
+	_forest_sprite.centered = false
+	_forest_sprite.texture_filter = CanvasItem.TEXTURE_FILTER_LINEAR
+	_forest_sprite.texture_repeat = CanvasItem.TEXTURE_REPEAT_ENABLED
+	_forest_sprite.region_enabled = true
+	_forest_sprite.region_rect = Rect2(0.0, 1.0, BillboardManager.SCREEN_W / sc.x, float(tex.get_height()) - 2.0)
+	_forest_sprite.scale = sc
+	_forest_sprite.position = Vector2(0.0, y0)
+	add_child(_forest_sprite)
+
+func _apply_bg_scroll() -> void:
+	if _sky_sprite != null:
+		var rect = _sky_sprite.region_rect
+		rect.position.x = _sky_scroll / _sky_sc_x
+		_sky_sprite.region_rect = rect
+	if _mtn_sprite != null:
+		var rect = _mtn_sprite.region_rect
+		rect.position.x = _mtn_scroll / _mtn_sc_x
+		_mtn_sprite.region_rect = rect
+	if _forest_sprite != null:
+		var rect = _forest_sprite.region_rect
+		rect.position.x = _forest_scroll / _forest_sc_x
+		_forest_sprite.region_rect = rect
 
 # ─────────────────────────────────────────────────────────────
 func _process(delta: float) -> void:
+	if _game_state == "main_menu":
+		return
+
 	if _game_state == "game_over":
 		_state_timer += delta
 		var fade := clampf(_state_timer / GAMEOVER_FADE_DURATION, 0.0, 1.0)
@@ -209,19 +333,29 @@ func _process(delta: float) -> void:
 		var ease_go := smoothstep(0.0, 1.0, _hud._focus_t)
 		_camera.zoom = Vector2(1.0, 1.0).lerp(Vector2(2.2, 2.2), ease_go)
 		_camera.position = Vector2(640.0, 360.0).lerp(Vector2(665.0, 120.0), ease_go)
+		if _state_timer >= RETURN_TO_MENU_DELAY:
+			_show_main_menu()
 		return
-	
+
 	if _game_state == "stage_clear":
 		_state_timer += delta
-		if _state_timer >= STAGE_CLEAR_DURATION:
-			_advance_to_next_stage()
+		if _state_timer >= RETURN_TO_MENU_DELAY:
+			_show_main_menu()
 		return
 	
+	if _game_state == "stage_exit":
+		_state_timer += delta
+		_update_stage_exit(delta)
+		return
+
+	if _game_state == "maintenance":
+		return
+
 	# ── playing 상태 ──
 	_vehicle.handle_input(delta)
 
-	# 차량 이동 시 루팅 UI 강제 종료
-	if _vehicle.speed > 0.5 and _loot_ui != null and _loot_ui.is_open():
+	# 차량 이동 시 폐차 루팅 UI 강제 종료 (내 인벤토리는 유지)
+	if _vehicle.speed > 0.5 and _loot_ui != null and _loot_ui.is_open() and not _loot_ui._is_trunk_only:
 		_loot_ui.close()
 		_active_wreck_seed = -1
 	_vehicle.update_scroll(delta)
@@ -247,15 +381,24 @@ func _process(delta: float) -> void:
 	# ── 스테이지 클리어 체크 ──
 	var stage_distance := _vehicle.scroll_z - stage_start_z
 	if stage_distance >= STAGE_LENGTH:
+		# UI 정리 — 인벤토리/루팅 닫기, 룸미러·라디오·계기판 포커스 해제
+		if _loot_ui != null and _loot_ui.is_open():
+			_loot_ui.close()
+			_active_wreck_seed = -1
+		_hud.hide_loot_prompt()
+		_hud.reset_focus_states()
+		if _jumper_on_hood:
+			_jumper_on_hood = false
+			_jumper_escape_gauge = 0.0
+			_hud.set_jumper_on_hood(false, false)
+		_stages_cleared_this_run += 1
 		if current_stage >= TOTAL_STAGES:
 			# 최종 스테이지 클리어 = 엔딩
 			_game_state = "stage_clear"
 			_state_timer = 0.0
 			_hud.show_stage_clear(current_stage, true)
 		else:
-			_game_state = "stage_clear"
-			_state_timer = 0.0
-			_hud.show_stage_clear(current_stage, false)
+			_advance_to_next_stage()
 		return
 	
 	# 정신력 업데이트 (괴물이 40 단위 이내로 다가오면 공포감으로 감소)
@@ -267,6 +410,7 @@ func _process(delta: float) -> void:
 	# 라디오 죽음의 주파수: 정신력 -2/초 (GDD 18-radio.md)
 	if _hud.get_radio_on_death():
 		_sanity_ratio -= 0.02 * delta  # 2% per second
+	
 	
 	_sanity_ratio = clampf(_sanity_ratio, 0.0, 1.0)
 	
@@ -302,14 +446,26 @@ func _process(delta: float) -> void:
 	)
 	# 유리 셰이더에 카메라 파라미터 전달 (와이퍼 자국이 카메라 줌과 함께 이동하도록)
 	if _rain._shader_mat:
-		_rain._shader_mat.set_shader_parameter("cam_center_uv", _camera.position / Vector2(1280.0, 720.0))
+		_rain._shader_mat.set_shader_parameter("cam_center_uv", _camera.position / Vector2(BillboardManager.SCREEN_W, BillboardManager.SCREEN_H))
 		_rain._shader_mat.set_shader_parameter("cam_zoom", _camera.zoom.x)
-	_road.update_state(_vehicle.scroll_z, _vehicle.cam_x, curve_x, hill_px)
-	_scavenging.update_state(_vehicle.scroll_z, _vehicle.cam_x, curve_x, hill_px)
-	_trees.update_state(_vehicle.scroll_z, _vehicle.cam_x, curve_x, hill_px)
-	_obstacles.update_state(_vehicle.scroll_z, _vehicle.cam_x, curve_x, hill_px)
-	_watchers.update_state(_vehicle.scroll_z, _vehicle.cam_x, curve_x, hill_px)
-	_jumpers.update_state(_vehicle.scroll_z, _vehicle.cam_x, curve_x, hill_px)
+	# ── 정신력 기반 왜곡 ──
+	var threshold_p := 0.30 if _meta.has_perk("reality") else 0.40
+	var dist_strength_p := 0.0
+	if _sanity_ratio < threshold_p:
+		dist_strength_p = (threshold_p - _sanity_ratio) / threshold_p
+		if _meta.has_perk("unyielding"):
+			dist_strength_p *= 0.70
+
+	_road.update_state(_vehicle.scroll_z, _vehicle.cam_x, curve_x, hill_px, _vehicle.headlight_range)
+	_billboard_mgr.update_state(_vehicle.scroll_z, _vehicle.cam_x, curve_x, hill_px, _vehicle.headlight_range)
+	
+	_scavenging.update_state(_vehicle.scroll_z, _vehicle.cam_x, curve_x, hill_px, _vehicle.headlight_range)
+	_trees.update_state(_vehicle.scroll_z, _vehicle.cam_x, curve_x, hill_px, _vehicle.headlight_range)
+	_obstacles.update_state(_vehicle.scroll_z, _vehicle.cam_x, curve_x, hill_px, _vehicle.headlight_range)
+	_watchers.update_state(_vehicle.scroll_z, _vehicle.cam_x, curve_x, hill_px, _vehicle.headlight_range)
+	_jumpers.update_state(_vehicle.scroll_z, _vehicle.cam_x, curve_x, hill_px, _vehicle.headlight_range)
+	
+	_billboard_mgr.render_all()
 
 	if _obstacles.check_collision(_vehicle):
 		_hud.on_rock_hit()
@@ -321,11 +477,13 @@ func _process(delta: float) -> void:
 		_hud.on_watcher_hit()
 	if _jumpers.check_collision(_vehicle):
 		if _jumper_on_hood:
-			# 이미 탑승 중일 때 추가 점퍼 충돌 → 공통 충돌 효과 적용
+			# 이미 탑승 중 → 보닛 점퍼 깔리는 연출 + 덜컹 효과
+			_jumper_on_hood = false
+			_jumper_escape_gauge = 0.0
+			_hud.crush_jumper_on_hood()
 			_vehicle.apply_watcher_hit()
-			_sanity_ratio -= 0.10
+			_sanity_ratio -= 0.08
 			_sanity_ratio = clampf(_sanity_ratio, 0.0, 1.0)
-			_hud.on_watcher_hit()
 		# 탑승 중이 아닐 때는 점프 애니메이션 진행 후 jumper_boarded 신호로 처리
 
 	# ── 보닛 위 점퍼 처리 ──
@@ -338,7 +496,8 @@ func _process(delta: float) -> void:
 		var steering_delta: float = absf(_vehicle.steering_angle - _prev_steering)
 		var steering_velocity: float = steering_delta / maxf(delta, 0.001)
 		var speed_coeff: float = _vehicle.speed / 240.0
-		var fill: float = (steering_velocity / 35.0) * speed_coeff * JUMPER_ESCAPE_FILL_RATE
+		var react_mult: float = 1.25 if _meta.has_perk("fast_react") else 1.0
+		var fill: float = (steering_velocity / 35.0) * speed_coeff * JUMPER_ESCAPE_FILL_RATE * react_mult
 		_jumper_escape_gauge = minf(_jumper_escape_gauge + fill * delta, JUMPER_ESCAPE_TARGET)
 		_hud.update_escape_gauge(_jumper_escape_gauge / JUMPER_ESCAPE_TARGET)
 		_hud.sway_jumper(_vehicle.steering_angle)
@@ -377,53 +536,220 @@ func _on_loot_prompt_clicked() -> void:
 		return
 	var nearest := _scavenging.get_nearest_car()
 	if nearest.is_empty(): return
-	# 폐차 k 값을 시드로 사용
-	var seed_val := int(nearest.get("k", 0)) * 99991 + 7
-	if seed_val == _active_wreck_seed and _loot_ui.is_open():
+	
+	var k := int(nearest["k"])
+	# 스테이지 번호를 크게 곱해 더해줌으로써 다른 스테이지와 ID가 겹칠 확률을 제거
+	var wreck_seed := _scavenging.seed_offset + (current_stage * 1000000) + (k * 1337)
+	
+	if wreck_seed == _active_wreck_seed and _loot_ui.is_open():
 		return  # 이미 열려 있음
-	_active_wreck_seed = seed_val
-	_loot_ui.open_wreck(seed_val)
+	_active_wreck_seed = wreck_seed
+	_loot_ui.open_wreck(wreck_seed)
 
-# ── 다음 스테이지로 진행 ────────────────────────────────────
+# ── 다음 스테이지로 진행 (연출 시작) ──────────────────────────────────────
 func _advance_to_next_stage() -> void:
 	if current_stage >= TOTAL_STAGES:
-		# TODO: 엔딩 씨은 처리
+		# TODO: 엔딩 씬 처리
 		return
-	
+
+	_game_state = "stage_exit"
+	_state_timer = 0.0
+	_vehicle.speed = 0.0
+	_exit_car_dz = 2.0
+	_exit_cam_tilt = 0.0
+	_road.show_headlight = false
+	_monster_distance += 100.0  # 스테이지 클리어 안전 버퍼
+
+	# HUD 숨기기 + 카메라 리셋
+	_hud.visible = false
+	_camera.zoom = Vector2.ONE
+	_camera.position = Vector2(640.0, 360.0)
+
+	# 점퍼 상태 초기화 (점프 중이던 점퍼가 다음 스테이지에 넘어오지 않도록)
+	_jumpers._hit_info.clear()
+
+	# 성애·물방울 제거 (빗줄기는 유지)
+	_rain.hide_glass_effects()
+
+	# 차 후면 텍스처 로드
+	_exit_car_tex = load("res://Asset/Image/car_back.png") as Texture2D
+
+	# 페이드용 검은 사각형 — CanvasLayer layer=5로 비(layer=1)보다 위에 렌더
+	if _exit_fade_rect:
+		_exit_fade_rect.get_parent().queue_free()
+	var fade_layer := CanvasLayer.new()
+	fade_layer.layer = 5
+	add_child(fade_layer)
+	_exit_fade_rect = ColorRect.new()
+	_exit_fade_rect.color = Color(0, 0, 0, 0)
+	_exit_fade_rect.position = Vector2.ZERO
+	_exit_fade_rect.size = Vector2(BillboardManager.SCREEN_W, BillboardManager.SCREEN_H)
+	fade_layer.add_child(_exit_fade_rect)
+
+func _update_stage_exit(delta: float) -> void:
+	var t := _state_timer
+	var total := EXIT_DRIVE_DURATION + EXIT_FADE_DURATION
+
+	# 카메라 틸트 — hill_px를 증가시켜 지평선을 아래로 내림 (하늘이 더 보이는 효과)
+	# camera.position 이동 방식은 road_renderer 렌더 영역이 뷰포트 밖으로 나가 검은 영역 발생
+	if t <= EXIT_DRIVE_DURATION:
+		var tilt_p := clampf(t / EXIT_DRIVE_DURATION, 0.0, 1.0)
+		_exit_cam_tilt = lerpf(0.0, 65.0, tilt_p * tilt_p)  # ease-in, 최대 65px (ROAD_BOTTOM_Y 안전 마진 확보)
+
+	# 도로/나무/배경은 계속 렌더 (차가 달려가는 배경)
+	var curve_x := _vehicle.compute_strip_curve_offsets()
+	var hill_px := _vehicle.hill_offset_px() + _exit_cam_tilt  # 틸트를 hill_px에 반영
+	_update_backdrops(delta)
+	_update_backdrops_vertical(delta, hill_px, true)
+	_road.update_state(_vehicle.scroll_z, _vehicle.cam_x, curve_x, hill_px)
+	_billboard_mgr.update_state(_vehicle.scroll_z, _vehicle.cam_x, curve_x, hill_px)
+	_trees.update_state(_vehicle.scroll_z, _vehicle.cam_x, curve_x, hill_px)
+
+	# 차가 도로를 따라 멀어짐 — dz 증가 (가속)
+	if t <= EXIT_DRIVE_DURATION:
+		var p := clampf(t / EXIT_DRIVE_DURATION, 0.0, 1.0)
+		var ease_p := p * p  # ease-in 가속
+		_exit_car_dz = lerpf(2.0, 80.0, ease_p)
+
+		# 빌보드로 차 렌더링
+		if _exit_car_tex:
+			var depth: float = BillboardManager.CAMERA_DEPTH / _exit_car_dz
+			if depth > 0.01:
+				var road_cx := BillboardManager.get_road_cx(depth, _vehicle.cam_x, curve_x)
+				var ground_y := BillboardManager.get_ground_y(depth, hill_px)
+				# 차 크기 — depth에 비례
+				var car_h := depth * 400.0
+				var car_w := car_h * float(_exit_car_tex.get_width()) / maxf(float(_exit_car_tex.get_height()), 1.0)
+				var car_y := ground_y - car_h
+				var car_x := road_cx - car_w * 0.5
+				# 지평선 근처에서 페이드
+				var fade := 1.0 - clampf((ease_p - 0.8) / 0.2, 0.0, 1.0)
+				_billboard_mgr.add_entry(depth, Rect2(car_x, car_y, car_w, car_h), _exit_car_tex, fade)
+
+	_billboard_mgr.render_all()
+
+	# 차가 사라진 후 페이드 아웃
+	if t > EXIT_DRIVE_DURATION and _exit_fade_rect:
+		var fade_t := clampf((t - EXIT_DRIVE_DURATION) / EXIT_FADE_DURATION, 0.0, 1.0)
+		_exit_fade_rect.color = Color(0, 0, 0, fade_t)
+
+	# 연출 완료 → 상점 진입
+	if t >= total:
+		if _exit_fade_rect:
+			_exit_fade_rect.get_parent().queue_free()  # CanvasLayer째 제거
+			_exit_fade_rect = null
+		_exit_car_tex = null
+		_exit_cam_tilt = 0.0
+		_road.show_headlight = true
+		_hud.visible = true
+		_hud.hide_stage_overlay()
+		_rain.stop_rain()  # 상점 진입 시 비/성애 제거
+		_game_state = "maintenance"
+		_shop_ui.open(current_stage, _upgrades, _meta)
+
+func _on_shop_depart_requested(route_type: String) -> void:
 	current_stage += 1
-	stage_start_z = _vehicle.scroll_z
-	_monster_distance = 60.0
-	
-	# 연료 만킱 충전
-	_vehicle.fuel = _vehicle.FUEL_MAX
-	_vehicle.fuel_ratio = 1.0
-	
-	# 정신력: 50% 미만이면 50%까지 회복 (04-resources.md)
+
+	# 열려 있는 UI 모두 닫기
+	_loot_ui.close()
+	_hud.hide_loot_prompt()
+
+	# 완전히 새로운 스테이지로 달리기 위해 거리·위치 초기화
+	_vehicle.scroll_z = 0.0
+	_vehicle.cam_x = 0.0
+	_vehicle.steering_angle = 0.0
+	stage_start_z = 0.0
+	# 정신력: 50% 미만이면 50%까지 회복
 	if _sanity_ratio < 0.5:
 		_sanity_ratio = 0.5
-	
+	if _meta.has_perk("strong_heart"):
+		_sanity_ratio = clampf(_sanity_ratio + 0.15, 0.0, 1.15)
+	else:
+		_sanity_ratio = clampf(_sanity_ratio, 0.0, 1.0)
+
+	# ── route_type에 따른 스테이지 환경 적용 ──
+	_apply_route_modifiers(route_type)
+	_vehicle.apply_upgrades(_upgrades, _meta)
+
+	# 카메라 틸트 초기화 — 배경 수직 위치를 즉시 기본값으로 맞춤
+	_update_backdrops_vertical(1.0, 0.0, true)
+
 	_game_state = "playing"
-	_hud.hide_stage_overlay()
-	_hud.update_radio_for_stage(current_stage)
+	_hud.update_radio_for_stage(current_stage, STAGE_LENGTH)
+	print("[GAME] 출발! 스테이지: ", current_stage, " 루트: ", route_type)
 
+func _apply_route_modifiers(route_type: String) -> void:
+	# 시드 — 스테이지마다 다른 배치
+	var stage_seed := randi()
+	_scavenging.seed_offset = stage_seed
+	_watchers.seed_offset   = stage_seed + 11111
+	_jumpers.seed_offset    = stage_seed + 22222
+	_obstacles.seed_offset  = stage_seed + 33333
+	_trees.seed_offset      = stage_seed + 44444
 
-# ── 코너일 때만 하늘·산 가로 패럴랙스 (무한 타일) ────────────
+	# 스폰 파라미터 — spawn_config.gd 에서 일괄 계산
+	var p := SpawnConfig.get_params(route_type, current_stage)
+	_scavenging.SPACING_Z    = p["scavenging"]["spacing"]
+	_scavenging.SPAWN_CHANCE = p["scavenging"]["chance"]
+	_watchers.SPACING_Z      = p["watcher"]["spacing"]
+	_watchers.SPAWN_CHANCE   = p["watcher"]["chance"]
+	_jumpers.SPACING_Z       = p["jumper"]["spacing"]
+	_jumpers.SPAWN_CHANCE    = p["jumper"]["chance"]
+	_obstacles.SPACING_Z     = p["obstacle"]["spacing"]
+	_obstacles.SPAWN_CHANCE  = p["obstacle"]["chance"]
+
+	# 비
+	if route_type == "weather":
+		_rain.start_rain()
+	else:
+		_rain.stop_rain()
+
+	# 어두운 루트: 배경·도로는 modulate, 오브젝트는 헤드라이트 ambient로 개별 처리
+	var is_dark := route_type == "dark"
+	var bg_mod   := Color(0.32, 0.30, 0.42, 1.0) if is_dark else Color.WHITE
+	var road_mod := Color(0.40, 0.38, 0.52, 1.0) if is_dark else Color.WHITE
+	_sky_sprite.modulate    = bg_mod
+	_mtn_sprite.modulate    = bg_mod
+	_forest_sprite.modulate = bg_mod
+	
+	_road.modulate          = Color.WHITE   # 노드 전체 변조 해제 (헤드라이트 가시성 확보)
+	_road.road_modulate     = road_mod      # 도로 구성요소만 개별 변조
+	
+	_scavenging.set_dark_mode(is_dark)
+	_watchers.set_dark_mode(is_dark)
+	_jumpers.set_dark_mode(is_dark)
+	_obstacles.set_dark_mode(is_dark)
+
+# ── 아이템 사용 ─────────────────────────────────────────────
+func _on_item_used(item_id: String) -> void:
+	if item_id == "fuel_can":
+		_vehicle.fuel = minf(_vehicle.fuel + 10.0, _vehicle.fuel_max)
+		_vehicle.fuel_ratio = _vehicle.fuel / _vehicle.fuel_max
+	elif item_id == "cigarette":
+		# 담배: 정신력 20% 회복 (임시값)
+		_sanity_ratio = minf(_sanity_ratio + 0.20, 1.0)
+	elif item_id == "patch_kit":
+		# 아직 타이어 내구도 시스템이 없지만 향후를 위한 틀
+		pass
+
+# ── 코너일 때만 하늘·산·숲 가로 패럴랙스 (무한 타일) ────────────
 func _update_backdrops(delta: float) -> void:
 	var k := _vehicle.curvature_at_scroll()
 	if absf(k) < CORNER_BG_K_THRESH:
 		return
 	var v := _vehicle.speed
-	var mtn_delta := k * v * BG_MTN_SPEED * delta
-	var sky_delta := mtn_delta * BG_SKY_VS_MTN
-	_mtn_scroll += mtn_delta
-	_sky_scroll += sky_delta
-	if _sky_a != null:
-		_apply_pair_scroll(_sky_a, _sky_b, _sky_scroll, _sky_tile_w)
-	if _mtn_a != null:
-		_apply_pair_scroll(_mtn_a, _mtn_b, _mtn_scroll, _mtn_tile_w)
+	var mtn_delta    := k * v * BG_MTN_SPEED * delta
+	var sky_delta    := mtn_delta * BG_SKY_VS_MTN
+	var forest_delta := mtn_delta * BG_FOREST_VS_MTN
+	_mtn_scroll    += mtn_delta
+	_sky_scroll    += sky_delta
+	_forest_scroll += forest_delta
+	_apply_bg_scroll()
 
 
 func _on_jumper_boarded() -> void:
+	if _game_state != "playing":
+		return  # playing 상태가 아니면 무시 (클리어/연출 중 신호 무시)
 	if _jumper_on_hood:
 		return  # 이미 탑승 중 → 무시 (check_collision에서 이미 처리)
 	_jumper_on_hood = true
@@ -434,20 +760,141 @@ func _on_jumper_boarded() -> void:
 		_loot_ui.close()
 		_active_wreck_seed = -1
 
-func _update_backdrops_vertical(delta: float, hill_px: float) -> void:
-	# 언덕 시 “올라가는 느낌”은 배경의 아주 약한 상하 시차로만 준다.
-	# 절대값을 1:1로 붙이면 숨쉬는 느낌이 나기 쉬워서, 스무딩 + 작은 계수로 제한.
-	var target_mtn_y := _mtn_base_y + hill_px * MTN_HILL_FACTOR
-	var target_sky_y := _sky_base_y + hill_px * SKY_HILL_FACTOR
-	var a := clampf(delta * BG_Y_SMOOTH_SPEED, 0.0, 1.0)
-	_mtn_y = lerpf(_mtn_y, target_mtn_y, a)
-	_sky_y = lerpf(_sky_y, target_sky_y, a)
+func _update_backdrops_vertical(delta: float, hill_px: float, instant: bool = false) -> void:
+	# 거리별 세로 패럴랙스: 가까울수록 지평선 이동을 더 많이 따라감
+	# 하늘(0.18) < 산(0.45) < 숲(0.72) — 자연스러운 시차감
+	var target_sky_y    := _sky_base_y    + hill_px * SKY_HILL_FACTOR
+	var target_mtn_y    := _mtn_base_y    + hill_px * MTN_HILL_FACTOR
+	var target_forest_y := _forest_base_y + hill_px * FOREST_HILL_FACTOR
+	var a := 1.0 if instant else clampf(delta * BG_Y_SMOOTH_SPEED, 0.0, 1.0)
+	_sky_y    = lerpf(_sky_y,    target_sky_y,    a)
+	_mtn_y    = lerpf(_mtn_y,    target_mtn_y,    a)
+	_forest_y = lerpf(_forest_y, target_forest_y, a)
 
-	if _mtn_a != null:
-		_mtn_a.position.y = _mtn_y
-	if _mtn_b != null:
-		_mtn_b.position.y = _mtn_y
-	if _sky_a != null:
-		_sky_a.position.y = _sky_y
-	if _sky_b != null:
-		_sky_b.position.y = _sky_y
+	if _sky_sprite    != null: _sky_sprite.position.y    = _sky_y
+	if _mtn_sprite    != null: _mtn_sprite.position.y    = _mtn_y
+	if _forest_sprite != null: _forest_sprite.position.y = _forest_y
+
+func _unhandled_input(event: InputEvent) -> void:
+	if event is InputEventKey and event.pressed and event.keycode == KEY_0:
+		if _game_state == "playing":
+			_advance_to_next_stage()
+
+# ── 메인 메뉴 ────────────────────────────────────────────────────
+func _build_main_menu() -> void:
+	_menu_layer = CanvasLayer.new()
+	_menu_layer.layer = 20  # 모든 UI 위에
+	add_child(_menu_layer)
+
+	_menu_container = Control.new()
+	_menu_container.set_anchors_preset(Control.PRESET_FULL_RECT)
+	_menu_layer.add_child(_menu_container)
+
+	# 배경 어둡게
+	var bg := ColorRect.new()
+	bg.color = Color(0.0, 0.0, 0.0, 0.85)
+	bg.set_anchors_preset(Control.PRESET_FULL_RECT)
+	_menu_container.add_child(bg)
+
+	# 타이틀
+	var title := Label.new()
+	title.text = "LAST ROAD"
+	title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	title.position = Vector2(0.0, 160.0)
+	title.size = Vector2(BillboardManager.SCREEN_W, 80.0)
+	title.add_theme_font_size_override("font_size", 72)
+	title.add_theme_color_override("font_color", Color(0.95, 0.85, 0.55))
+	_menu_container.add_child(title)
+
+	# 버튼 컨테이너
+	var btn_box := VBoxContainer.new()
+	btn_box.position = Vector2(490.0, 340.0)
+	btn_box.size = Vector2(300.0, 250.0)
+	btn_box.add_theme_constant_override("separation", 20)
+	_menu_container.add_child(btn_box)
+
+	var btn_start := _make_menu_button("게임시작")
+	btn_start.pressed.connect(_on_menu_start)
+	btn_box.add_child(btn_start)
+
+	var btn_upgrade := _make_menu_button("강화")
+	btn_upgrade.pressed.connect(_on_menu_upgrade)
+	btn_box.add_child(btn_upgrade)
+
+	var btn_exit := _make_menu_button("종료")
+	btn_exit.pressed.connect(func(): get_tree().quit())
+	btn_box.add_child(btn_exit)
+
+func _make_menu_button(text: String) -> Button:
+	var btn := Button.new()
+	btn.text = text
+	btn.custom_minimum_size = Vector2(300.0, 55.0)
+	btn.add_theme_font_size_override("font_size", 28)
+	return btn
+
+func _show_main_menu() -> void:
+	# 런 종료 시 포인트 지급
+	if _stages_cleared_this_run > 0:
+		_meta.award_run_points(_stages_cleared_this_run)
+	_game_state = "main_menu"
+	_menu_container.visible = true
+	_hud.visible = false
+	_hud.hide_stage_overlay()
+	_rain.stop_rain()
+	_camera.zoom = Vector2.ONE
+	_camera.position = Vector2(640.0, 360.0)
+
+func _on_menu_start() -> void:
+	_menu_container.visible = false
+	_reset_game()
+	_game_state = "playing"
+
+func _on_menu_upgrade() -> void:
+	_menu_container.visible = false
+	_skill_tree_ui.open()
+
+func _on_skill_tree_closed() -> void:
+	_menu_container.visible = true
+
+func _reset_game() -> void:
+	# 차량 및 메타 상태 초기화 (세션 기반)
+	_upgrades.reset_upgrades()
+	_inv_mgr.money = 0
+	_inv_mgr.trunk.fill("")
+	
+	_vehicle.apply_upgrades(_upgrades, _meta)
+	_vehicle.scroll_z = 0.0
+	_vehicle.cam_x = 0.0
+	_vehicle.steering_angle = 0.0
+	_vehicle.speed = 0.0
+	_vehicle.fuel = _vehicle.fuel_max
+	_vehicle.fuel_ratio = 1.0
+
+	# 게임 진행 초기화
+	current_stage = 1
+	stage_start_z = 0.0
+	_monster_distance = 350.0
+	_stages_cleared_this_run = 0
+	_sanity_ratio = 1.0
+	_state_timer = 0.0
+	_exit_cam_tilt = 0.0
+	_jumper_on_hood = false
+	_jumper_escape_gauge = 0.0
+	_active_wreck_seed = -1
+	_debug_stop_monster = false
+
+	# UI 초기화
+	_hud.visible = true
+	_hud.hide_stage_overlay()
+	_road.show_headlight = true
+
+	# 카메라 리셋
+	_camera.zoom = Vector2.ONE
+	_camera.position = Vector2(640.0, 360.0)
+
+	# 배경 리셋
+	_update_backdrops_vertical(1.0, 0.0, true)
+
+	# 스테이지 환경 적용
+	_apply_route_modifiers("normal")
+	_hud.update_radio_for_stage(1, STAGE_LENGTH)
