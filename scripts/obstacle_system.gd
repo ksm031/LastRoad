@@ -1,59 +1,78 @@
 extends Node2D
 class_name LastRoadObstacles
+const BillboardManager = preload("res://scripts/billboard_manager.gd")
 
-const _Road = preload("res://scripts/road_renderer.gd")
-
-const CAMERA_DEPTH := 0.84
-const ROAD_HW_MAX  := 650.0
-const ROAD_BOTTOM_Y := 500.0
-const HORIZON_Y_BASE := 300.0
-
-# ── 스폰 튜닝 ────────────────────────────────────────────────
-const SPACING_Z        := 22.0   # 큰 값일수록 덜 자주
-const SPAWN_CHANCE     := 0.14   # 0~1
+# ── 스폰 튜닝 (route_type에 따라 game_world에서 조정) ─────────
+var SPACING_Z        := 18.0    # 실제값은 spawn_config.gd에서 주입
+var SPAWN_CHANCE     := 0.25
+var seed_offset      := 0     # 스테이지마다 다른 배치를 위한 시드 오프셋
 const VISIBLE_DZ_MIN   := -1.0
-const VISIBLE_DZ_MAX   := 78.0
+const VISIBLE_DZ_MAX   := 90.0
 
 # ── 충돌 튜닝 ────────────────────────────────────────────────
-const HIT_DZ           := 0.38   # 더 가까이 와야 충돌로 처리
-const HIT_COOLDOWN_Z   := 4.0    # 같은 장애물이 재히트 되는 것 방지(지나갈 때까지)
+const HIT_DZ           := 0.38
+const HIT_COOLDOWN_Z   := 4.0
 
 var scroll_z: float = 0.0
 var cam_x: float = 0.0
 var hill_px: float = 0.0
 var _curve_x: PackedFloat32Array = PackedFloat32Array()
+var _headlight_range: float = 1.0
 
 var _textures: Array[Texture2D] = []
-var _hit_until_z: Dictionary = {} # key(int) -> until_z(float)
+var billboard_mgr: BillboardManager
+var _hit_until_z: Dictionary = {}
+var _light_pool: LightMaterialPool
+const POOL_SIZE := 60
+var jiwon_info: Dictionary = {}
 
 func _ready() -> void:
-	# 사용자가 추가한 돌 텍스처 로드
+	pass
+
+func load_assets() -> void:
+	if not _textures.is_empty(): return
+	
 	for i in range(1, 10):
-		var t := load("res://Asset/Image/Obstacle/rock_%02d.png" % i) as Texture2D
+		var t := BillboardManager.load_with_normal("res://Asset/Image/Obstacle/rock_%02d.png" % i)
 		if t:
 			_textures.append(t)
+	
+	_light_pool = LightMaterialPool.new(POOL_SIZE, _AMBIENT_NORMAL, _AMBIENT_DARK)
 
-func update_state(p_scroll_z: float, p_lane_x: float, p_curve_x: PackedFloat32Array, p_hill_px: float) -> void:
+const _AMBIENT_NORMAL := Color(0.55, 0.52, 0.48, 1.0)
+const _AMBIENT_DARK   := Color(0.12, 0.11, 0.10, 1.0) # 다시 어둡게 복구
+
+func set_dark_mode(is_dark: bool) -> void:
+	if _light_pool:
+		_light_pool.set_dark_mode(is_dark)
+
+func update_state(p_scroll_z: float, p_lane_x: float, p_curve_x: PackedFloat32Array, p_hill_px: float, p_headlight_range: float = 1.0) -> void:
 	scroll_z = p_scroll_z
 	cam_x = p_lane_x
 	_curve_x = p_curve_x
 	hill_px = p_hill_px
-	queue_redraw()
+	_headlight_range = p_headlight_range
+	_update_billboards()
+
+const OBJECT_WIDTH     := 0.9     # 오브젝트 자체 너비
 
 func check_collision(vehicle: LastRoadVehicle) -> bool:
 	if _textures.is_empty():
 		return false
 	_prune_hits()
 	var hit := false
-
-	var lane := clampi(int(round(vehicle.cam_x)), -1, 1)
 	var k0 := int(floor(scroll_z / SPACING_Z)) - 1
 	var k1 := k0 + 4
+	
+	# 통합 충돌 범위 계산: (차폭 + 오브젝트폭) / 2
+	var threshold := (vehicle.COLLISION_WIDTH + OBJECT_WIDTH) * 0.5
+	
 	for k in range(k0, k1 + 1):
 		var o := _obstacle_at_k(k)
 		if o.is_empty():
 			continue
-		if int(o["lane"]) != lane:
+		
+		if abs(float(o["lane"]) - vehicle.cam_x) > threshold:
 			continue
 		var wz := float(o["wz"])
 		var dz := wz - scroll_z
@@ -65,95 +84,74 @@ func check_collision(vehicle: LastRoadVehicle) -> bool:
 		vehicle.apply_rock_hit()
 		hit = true
 		break
-
 	return hit
 
 func _is_hit_active(k: int) -> bool:
 	return _hit_until_z.has(k) and float(_hit_until_z[k]) > scroll_z
 
 func _prune_hits() -> void:
-	# 지나간 장애물 히트 기록 제거
 	var keys := _hit_until_z.keys()
 	for k in keys:
 		if float(_hit_until_z[k]) <= scroll_z:
 			_hit_until_z.erase(k)
 
 func _obstacle_at_k(k: int) -> Dictionary:
-	# 결정적 생성: 같은 k는 항상 같은 결과
-	var r := _rand01(k * 7919 + 11)
-	if r > SPAWN_CHANCE:
+	if BillboardManager.get_rand01(k * 7919 + 11, seed_offset) > SPAWN_CHANCE:
 		return {}
-	var lane := int(floor(_rand01(k * 7919 + 97) * 3.0)) - 1  # -1,0,1
-	var wz := float(k) * SPACING_Z + 12.0 + _rand01(k * 7919 + 203) * 6.0
-	var tidx := int(floor(_rand01(k * 7919 + 409) * float(_textures.size())))
-	tidx = clampi(tidx, 0, _textures.size() - 1)
+	var lane_r := BillboardManager.get_rand01(k * 12345 + 157, seed_offset)
+	var lane := 0
+	if lane_r < 0.33: lane = -1
+	elif lane_r > 0.66: lane = 1
+	var jitter := (BillboardManager.get_rand01(k * 9876 + 233, seed_offset) - 0.5) * 0.15
+	var wz := float(k) * SPACING_Z + 10.0 + BillboardManager.get_rand01(k * 7919 + 203, seed_offset) * 8.0
+	
+	if jiwon_info.has("wz"):
+		var j_wz: float = jiwon_info["wz"]
+		var j_lane: int = jiwon_info["lane"]
+		
+		# 1. 안전 간격 유지 (지원 기준 앞뒤 40m 내에는 스폰 금지)
+		if absf(wz - j_wz) < 40.0:
+			return {}
+			
+		# 2. 제일 가까운 앞쪽 장애물(40m ~ 120m)이 같은 차선에 없도록 강제 변경
+		if wz > j_wz and wz < j_wz + 120.0:
+			if lane == j_lane:
+				lane = j_lane + 1
+				if lane > 1: lane = -1
+				
+	var tidx := clampi(int(floor(BillboardManager.get_rand01(k * 7919 + 409, seed_offset) * float(_textures.size()))), 0, _textures.size() - 1)
 	return {
-		"k": k,
-		"lane": lane,
-		"wz": wz,
-		"tidx": tidx,
+		"k": k, "lane": lane, "jitter": jitter, "wz": wz, "tidx": tidx,
 	}
 
-func _rand01(seed: int) -> float:
-	var h := int((seed * 1103515245 + 12345) & 0x7fffffff)
-	return float(h & 0xFFFF) / 65535.0
-
-func _curve_at_depth(depth: float) -> float:
-	var n := _curve_x.size()
-	if n <= 1:
-		return 0.0
-	# depth 1(가까움) -> idx 0, depth 0(멀리) -> idx n-1
-	var idx := clampi(int(round((1.0 - depth) * float(n - 1))), 0, n - 1)
-	return _curve_x[idx]
-
-func _draw() -> void:
-	if _textures.is_empty():
+func _update_billboards() -> void:
+	if _textures.is_empty() or billboard_mgr == null:
 		return
-
-	var hy := HORIZON_Y_BASE + hill_px
-	var entries: Array = []
-
 	var k_min := int(floor((scroll_z + VISIBLE_DZ_MIN) / SPACING_Z))
 	var k_max := int(ceil((scroll_z + VISIBLE_DZ_MAX) / SPACING_Z))
+	if _light_pool:
+		_light_pool.reset()
+		
 	for k in range(k_min, k_max + 1):
 		var o := _obstacle_at_k(k)
 		if o.is_empty():
 			continue
 		var wz := float(o["wz"])
 		var dz := wz - scroll_z
-		if dz < VISIBLE_DZ_MIN or dz > VISIBLE_DZ_MAX:
+		if dz <= -1.0 or dz > VISIBLE_DZ_MAX:
 			continue
-
-		var depth := clampf(CAMERA_DEPTH / dz, 0.0, 1.0)
-		if depth < 0.02:
-			continue
-
-		var road_hw := depth * ROAD_HW_MAX
-		var cx_curve := _curve_at_depth(depth)
-		var road_cx := 640.0 + cx_curve - cam_x * depth * 320.0
-		var ground_y := hy + depth * (ROAD_BOTTOM_Y - hy)
-
-		# 차선 위치(도로 폭 기반)
+		var proj := BillboardManager.calculate_projection(dz, cam_x, _curve_x, hill_px, _headlight_range)
+		var depth: float = proj.depth
 		var lane := int(o["lane"])
-		var lane_off := float(lane) * road_hw * 0.42
-		var x := road_cx + lane_off
-
+		var jitter := float(o.get("jitter", 0.0))
+		var lane_off: float = (float(lane) + jitter) * float(proj.road_hw) * 0.42
+		var x: float = float(proj.road_cx) + lane_off
 		var tex := _textures[int(o["tidx"])]
-		var h := depth * 120.0
-		var w := h * float(tex.get_width()) / maxf(float(tex.get_height()), 1.0)
-		var y := ground_y - h
-
-		# 원거리 페이드
-		var fade := 1.0 - clampf((dz - VISIBLE_DZ_MAX * 0.75) / (VISIBLE_DZ_MAX * 0.25), 0.0, 1.0)
-
-		entries.append({
-			"d": depth,
-			"tex": tex,
-			"rect": Rect2(x - w * 0.5, y, w, h),
-			"fade": fade
-		})
-
-	entries.sort_custom(func(a, b): return a.d < b.d)
-	for e in entries:
-		draw_texture_rect(e.tex, e.rect, false, Color(1.0, 1.0, 1.0, e.fade))
-
+		var h: float = depth * 120.0
+		var w: float = h * float(tex.get_width()) / maxf(float(tex.get_height()), 1.0)
+		var y: float = float(proj.ground_y) - h
+		var fade := 1.0 - clampf((dz - VISIBLE_DZ_MAX * 0.8) / (VISIBLE_DZ_MAX * 0.2), 0.0, 1.0)
+		var rect := Rect2(x - w * 0.5, y, w, h)
+		
+		var mat := _light_pool.get_material(float(proj.light_h)) if _light_pool else null
+		billboard_mgr.add_entry(depth, rect, tex, fade, mat, Color.WHITE, false, float(proj.light_h), float(proj.ground_y))

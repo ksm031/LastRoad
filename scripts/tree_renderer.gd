@@ -1,12 +1,10 @@
 extends Node2D
+const BillboardManager = preload("res://scripts/billboard_manager.gd")
 
-const HORIZON_Y      := 300.0
-const ROAD_BOTTOM_Y  := 500.0
-const ROAD_HW_MAX    := 650.0
-const CAMERA_DEPTH   := 0.84
+# ── 상수 (BillboardManager 투영 모델 사용) ─────
 
 const TREE_BASE_H    := 480.0
-const DZ_MIN         := 0.4
+const DZ_MIN         := 0.001
 const DZ_MAX         := 72.0
 # 도로(차선) 쪽으로 당겨지는 산란을 상쇄 — depth 1 기준 픽셀, 바깥으로만 밀기
 const TREE_MARGIN_FROM_ROAD := 28.0
@@ -27,31 +25,52 @@ var scroll_z : float = 0.0
 var cam_x    : float = 0.0
 var _curve_x : PackedFloat32Array = PackedFloat32Array()
 var hill_px  : float = 0.0
-var _textures : Array[Texture2D] = []
+var scavenging_sys: Node2D = null
+var seed_offset : int = 0  # 스테이지마다 다른 배치를 위한 시드 오프셋
+var _textures_tree : Array[Texture2D] = []
+var _textures_bush : Array[Texture2D] = []
+var billboard_mgr: Node # BillboardManager
+var _range_mult : float = 1.0
+var _light_pool : LightMaterialPool
+const POOL_SIZE := 400
 
 func _ready() -> void:
-	for i in range(1, 8):
-		var t := load("res://Asset/Image/trees/tree_%02d.png" % i) as Texture2D
-		if t:
-			_textures.append(t)
+	# _ready에서는 로딩하지 않음 (메인 메뉴 빠른 진입 목적)
+	pass
 
-func update_state(sz: float, cx: float, p_curve_x: PackedFloat32Array = PackedFloat32Array(), p_hill_px: float = 0.0) -> void:
+func load_assets() -> void:
+	if not _textures_tree.is_empty(): return # 이미 로드됨
+	
+	for i in range(1, 8):
+		var t := BillboardManager.load_with_normal("res://Asset/Image/trees/tree_%02d.png" % i)
+		if t: _textures_tree.append(t)
+	for i in range(1, 9):
+		var t := BillboardManager.load_with_normal("res://Asset/Image/trees/bush_%02d.png" % i)
+		if t: _textures_bush.append(t)
+	
+	_light_pool = LightMaterialPool.new(POOL_SIZE, _AMBIENT_NORMAL, _AMBIENT_DARK)
+
+const _AMBIENT_NORMAL := Color(0.35, 0.38, 0.32, 1.0)
+const _AMBIENT_DARK   := Color(0.04, 0.05, 0.03, 1.0)
+
+func set_dark_mode(is_dark: bool) -> void:
+	if _light_pool:
+		_light_pool.set_dark_mode(is_dark)
+
+func update_state(sz: float, cx: float, p_curve_x: PackedFloat32Array = PackedFloat32Array(), p_hill_px: float = 0.0, p_range_mult: float = 1.0) -> void:
 	scroll_z = sz
 	cam_x    = cx
 	_curve_x = p_curve_x
 	hill_px  = p_hill_px
-	queue_redraw()
+	_range_mult = p_range_mult
+	_update_billboards()
 
-func _tex_idx(k: int, side: int, layer: int) -> int:
-	return absi(k * 2654435761 + side * 40503 + layer * 1234567) % _textures.size()
-
-func _draw() -> void:
-	if _textures.is_empty():
+func _update_billboards() -> void:
+	if _textures_tree.is_empty() or billboard_mgr == null:
 		return
-	var hy := HORIZON_Y + hill_px
-
-	var entries : Array = []
-
+	if _light_pool:
+		_light_pool.reset()
+		
 	for side in [-1, 1]:
 		for li in range(LAYER_CONFIGS.size()):
 			var edge_mult := float(LAYER_CONFIGS[li][0])
@@ -67,45 +86,53 @@ func _draw() -> void:
 				var dz  := wz - scroll_z
 				if dz <= 0.0:
 					continue
-
-				var depth := clampf(CAMERA_DEPTH / dz, 0.0, 1.0)
-				if depth < 0.02:
+					
+				if scavenging_sys != null and scavenging_sys.is_in_clear_zone(wz, side):
 					continue
 
-				var ground_y := hy + depth * (ROAD_BOTTOM_Y - hy)
-				var road_hw := depth * ROAD_HW_MAX
-				var cx_curve := 0.0
-				var ns := _curve_x.size()
-				if ns > 1:
-					var idx := clampi(int(round((1.0 - depth) * float(ns - 1))), 0, ns - 1)
-					cx_curve = _curve_x[idx]
-				var road_cx := 640.0 + cx_curve - cam_x * depth * 320.0
+				var proj := BillboardManager.calculate_projection(dz, cam_x, _curve_x, hill_px, _range_mult)
+				var depth: float = proj.depth
 
-				# 세계 좌표 기반 x — 도로와 동일 소실점으로 수렴
-				var hash_val := absi(k * 134775813 + side * 1103515245 + li * 987654321)
+				var hash_val := absi((k + seed_offset) * 134775813 + side * 1103515245 + li * 987654321)
 				var xvar     := float(hash_val % (x_scatter * 2) - x_scatter) * depth
-				# 산란이 도로 쪽(-side)으로 갈 때도 최소 이격 유지
 				var margin   := float(side) * depth * TREE_MARGIN_FROM_ROAD
-				var tx       := road_cx + float(side) * road_hw * edge_mult + xvar + margin
+				var tx: float = float(proj.road_cx) + float(side) * float(proj.road_hw) * edge_mult + xvar + margin
 
-				var th  := depth * TREE_BASE_H
-				var tex := _textures[_tex_idx(k, side, li)]
+				var is_bush := (hash_val % 100 < 35)
+				var base_h  := 160.0 if is_bush else TREE_BASE_H
+				var tex     := _textures_bush[hash_val % _textures_bush.size()] if is_bush else _textures_tree[hash_val % _textures_tree.size()]
+				
+				var th  := depth * base_h
 				var tw  := th * float(tex.get_width()) / float(tex.get_height())
 
-				# 완전히 화면 밖으로 나간 나무만 제거
-				if tx + tw * 0.5 < 0.0 or tx - tw * 0.5 > 1280.0:
+				if tx + tw * 0.5 < 0.0 or tx - tw * 0.5 > BillboardManager.SCREEN_W:
 					continue
 
-				# 원거리 페이드만 유지
 				var fade := 1.0 - clampf((dz - DZ_MAX * 0.75) / (DZ_MAX * 0.25), 0.0, 1.0)
 
-				entries.append({
-					"d":    depth,
-					"rect": Rect2(tx - tw * 0.5, ground_y - th, tw, th),
-					"tex":  tex,
-					"fade": fade
-				})
+				var c_r := 0.32
+				var c_g := 0.38
+				var c_b := 0.26
+				if hash_val % 100 < 40:
+					var r_shift = (float(hash_val % 21) / 20.0) * 0.2 - 0.1
+					var g_shift = (float((hash_val / 21) % 21) / 20.0) * 0.2 - 0.1
+					var b_shift = (float((hash_val / 441) % 21) / 20.0) * 0.2 - 0.1
+					c_r = clampf(c_r + r_shift, 0.0, 1.0)
+					c_g = clampf(c_g + g_shift, 0.0, 1.0)
+					c_b = clampf(c_b + b_shift, 0.0, 1.0)
 
-	entries.sort_custom(func(a, b): return a.d < b.d)
-	for e in entries:
-		draw_texture_rect(e.tex, e.rect, false, Color(0.32, 0.38, 0.26, e.fade))
+				var rect = Rect2(tx - tw * 0.5, float(proj.ground_y) - th, tw, th)
+				
+				var mat := _light_pool.get_material(float(proj.light_h)) if _light_pool else null
+				# 나무는 바람에 흔들리도록 sway=1.0 적용
+				# 각 나무마다 다른 위상을 가지도록 hash_val을 이용해 sway_offset 전달
+				var s_off := (float(hash_val % 628) / 100.0) 
+				billboard_mgr.add_entry(
+					depth, rect, tex, fade, mat, Color(c_r, c_g, c_b), 
+					false, float(proj.light_h), float(proj.ground_y),
+					false, 0.0, 1.0, s_off
+				)
+
+func _tex_idx(k: int, side: int, layer: int) -> int:
+	# 더이상 메인 루프에서 사용하지 않지만, 호환성을 위해 유지할 경우 _textures_tree를 사용하거나 삭제 가능
+	return absi(k * 2654435761 + side * 40503 + layer * 1234567) % _textures_tree.size()
