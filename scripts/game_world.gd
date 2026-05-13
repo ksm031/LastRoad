@@ -33,6 +33,7 @@ var _prev_steering : float = 0.0
 
 var _monster_distance: float = 350.0  # 초기 괴물 간격 (세계 단위)
 var _sanity_ratio: float = 1.0        # 정신력 (1.0 = 정상, 0.0 = 패닉)
+var _weathered_pebble_timer: float = 0.0
 
 # ── 스테이지 진행 시스템 ─────────────────────────────────────
 const MONSTER_SPEEDS := [70.0, 80.0, 90.0, 100.0, 110.0, 120.0]  # 스테이지 1~6
@@ -199,6 +200,7 @@ func _ready() -> void:
 	_loot_ui.inv = _inv_mgr
 	_loot_ui.meta = _meta
 	_loot_ui.vehicle = _vehicle
+	_loot_ui.charm_sys = _charm_sys
 	add_child(_loot_ui)
 	_loot_ui.loot_ui_closed.connect(func(): _hud.hide_loot_prompt())
 	_loot_ui.item_used.connect(_on_item_used)
@@ -402,9 +404,16 @@ func _process(delta: float) -> void:
 	var curve_x := _vehicle.compute_strip_curve_offsets()
 	var hill_px := _vehicle.hill_offset_px()
 	
+	# 풍화된 조약돌 부적: 괴물 접근 속도 감소
+	if _weathered_pebble_timer > 0.0:
+		_weathered_pebble_timer -= delta
+		
 	# 괴물 간격 업데이트
 	if not _debug_stop_monster:
 		var monster_speed := float(MONSTER_SPEEDS[clampi(current_stage - 1, 0, TOTAL_STAGES - 1)])
+		if _weathered_pebble_timer > 0.0:
+			monster_speed *= 0.7 # 30% 느려짐
+			
 		var speed_diff := _vehicle.speed - monster_speed
 		_monster_distance += speed_diff * 0.05 * delta
 		_monster_distance = maxf(_monster_distance, 0.0)
@@ -521,16 +530,24 @@ func _process(delta: float) -> void:
 
 	if _obstacles.check_collision(_vehicle):
 		BillboardManager.add_impact_shake(0.6)
+		if _charm_sys.has_charm("weathered_pebble"):
+			_weathered_pebble_timer = 5.0
 		_hud.on_rock_hit()
 	if _watchers.check_collision(_vehicle):
 		# 와쳐: 속도 살짝 감소 + 정신력 감소 (GDD: 충돌 효과 + 정신력 -5~-20)
-		_vehicle.apply_watcher_hit()
+		if _charm_sys.has_charm("adrenaline_syringe"):
+			_vehicle.apply_adrenaline_boost()
+		else:
+			_vehicle.apply_watcher_hit()
 		_sanity_ratio -= 0.10  # 정신력 10% 감소
 		_sanity_ratio = clampf(_sanity_ratio, 0.0, 1.0)
 		_hud.on_watcher_hit()
 	if _jiwons.check_collision(_vehicle):
 		# jiwon: 와쳐와 동일한 기능
-		_vehicle.apply_watcher_hit()
+		if _charm_sys.has_charm("adrenaline_syringe"):
+			_vehicle.apply_adrenaline_boost()
+		else:
+			_vehicle.apply_watcher_hit()
 		_sanity_ratio -= 0.10
 		_sanity_ratio = clampf(_sanity_ratio, 0.0, 1.0)
 		_hud.on_watcher_hit()

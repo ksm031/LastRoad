@@ -19,6 +19,7 @@ const SEARCH_TIME := 0.10   # 슬롯 1개당 수색 시간 (초)
 var inv: InventoryManager
 var meta: MetaProgression
 var vehicle: LastRoadVehicle
+var charm_sys: CharmSystem
 var _wreck_seed: int = -1
 
 # ── 폐차 상태 ─────────────────────────────────────────────
@@ -153,6 +154,23 @@ func _reveal_next_slot() -> void:
 	while _search_slot < total:
 		if not _revealed[_search_slot]:
 			_revealed[_search_slot] = true
+			
+			# ── 자석 고양이 부적: 빈 칸 수색 시 15% 확률로 기름 1L 획득 ──
+			var slot_item := str(_wreck_items.get(_search_slot, ""))
+			if slot_item == "" and charm_sys and charm_sys.has_charm("magnetic_cat"):
+				if randf() < 0.15:
+					if vehicle:
+						vehicle.fuel = minf(vehicle.fuel + 1.0, vehicle.fuel_max)
+						vehicle.fuel_ratio = vehicle.fuel / vehicle.fuel_max
+					# 심리적 피드백: 슬롯을 연두색으로 플래시
+					var slot_ctrl := _wreck_slots[_search_slot] as Control
+					var bg := slot_ctrl.get_node_or_null("BG") as ColorRect
+					if bg:
+						var orig_color := bg.color
+						bg.color = Color(0.15, 0.55, 0.25, 0.9)  # 연두색 플래시
+						var tw := create_tween()
+						tw.tween_property(bg, "color", orig_color, 0.6)
+			
 			_refresh_wreck_slot(_search_slot)
 			_search_slot += 1
 			_active_state["search_slot"] = _search_slot

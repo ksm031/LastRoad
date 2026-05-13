@@ -120,6 +120,7 @@ var fuel_ratio     : float = 1.0       # fuel / fuel_max (0~1), HUD 표시용
 const ROCK_HIT_SPEED   := 15.0  # "시속 10km대"
 const ACCEL_LOCK_TIME  := 0.2
 var _accel_lock: float = 0.0
+var _adrenaline_timer: float = 0.0
 
 # ── 업그레이드 레벨 (0~5) ───────────────────────────────────
 var upgrade_levels := {
@@ -277,6 +278,9 @@ func handle_input(delta: float) -> void:
 
 	if _accel_lock > 0.0:
 		w = false
+		
+	if _adrenaline_timer > 0.0:
+		_adrenaline_timer -= delta
 
 	# ── 연료 소모 및 물리 연산 ──────────────────────────────────
 	if speed > 0.1:
@@ -314,6 +318,9 @@ func handle_input(delta: float) -> void:
 		var tire_mult = maxf(1.0 - (flat_count * 0.15), 0.25)
 		effective_max *= tire_mult
 		effective_accel *= tire_mult
+		
+	if _adrenaline_timer > 0.0:
+		effective_accel *= 1.20
 		
 	if dur_drivetrain <= 0.0:
 		effective_max = minf(effective_max, 30.0)
@@ -461,3 +468,7 @@ func apply_watcher_hit() -> void:
 	# 와쳐 충돌: 속도 살짝 감소 (20% 감속) + 짧은 가속 불가
 	speed *= 0.8
 	_accel_lock = 0.1
+
+func apply_adrenaline_boost() -> void:
+	# 와쳐 등 적중 시 속도 유지 + 3초간 가속도 20% 보너스
+	_adrenaline_timer = 3.0
