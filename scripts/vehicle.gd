@@ -26,6 +26,13 @@ var fuel_rate     : float = FUEL_RATE_BASE
 var headlight_range : float = 1.0
 var traction_factor : float = 1.0  # 1.0 = 정상, < 1.0 = 미끄러움
 
+# ── 차량 내구도 상태 (신규 5파츠) ─────────────────────────────
+var dur_lf_tire     : float = 100.0  # 0~100%
+var dur_rf_tire     : float = 100.0
+var dur_lb_tire     : float = 100.0
+var dur_rb_tire     : float = 100.0
+var dur_drivetrain  : float = 100.0
+
 # ── 연료 파라미터 ────────────────────────────────────────────
 # ── 연료 파라미터 ────────────────────────────────────────────
 const FUEL_MAX_BASE      := 40.0   # L
@@ -284,13 +291,40 @@ func handle_input(delta: float) -> void:
 			fuel_depleted.emit()
 
 	# 가속/제동 판단
+	# 내구도 페널티 계산
+	var flat_count := 0
+	var pull_dir := 0.0
+	if dur_lf_tire <= 0.0: 
+		flat_count += 1
+		pull_dir -= 1.0
+	if dur_lb_tire <= 0.0: 
+		flat_count += 1
+		pull_dir -= 1.0
+	if dur_rf_tire <= 0.0: 
+		flat_count += 1
+		pull_dir += 1.0
+	if dur_rb_tire <= 0.0: 
+		flat_count += 1
+		pull_dir += 1.0
+
 	var effective_max := max_speed
+	var effective_accel := accel
+	
+	if flat_count > 0:
+		var tire_mult = maxf(1.0 - (flat_count * 0.15), 0.25)
+		effective_max *= tire_mult
+		effective_accel *= tire_mult
+		
+	if dur_drivetrain <= 0.0:
+		effective_max = minf(effective_max, 30.0)
+		effective_accel *= 0.5
+		
 	var can_accel := (fuel > 0.0)
 	
 	if w:
 		if can_accel:
-			# 연료 있을 때: 정상 가속
-			speed = minf(speed + accel * delta, effective_max)
+			# 연료 있을 때: 정상 가속 (내구도 페널티 반영)
+			speed = minf(speed + effective_accel * delta, effective_max)
 		else:
 			# 연료 없을 때 (Limp Mode): 시속 15km까지 아주 천천히 가속 가능
 			if speed < 15.0:
@@ -319,10 +353,15 @@ func handle_input(delta: float) -> void:
 
 	# 차량 속도에 비례하여 좌우 조향(차선 변경) 속도 조절 (비 올 때 traction_factor 반영)
 	var lateral_mult := clampf(speed / 50.0, 0.0, 1.0) * traction_factor
+	var frame_pull = pull_dir * 0.25 * lateral_speed * lateral_mult * delta
+	
+	var lat_move := 0.0
 	if a:
-		cam_x = maxf(cam_x - lateral_speed * lateral_mult * delta, -1.0)
+		lat_move = -lateral_speed * lateral_mult * delta
 	elif d:
-		cam_x = minf(cam_x + lateral_speed * lateral_mult * delta, 1.0)
+		lat_move = lateral_speed * lateral_mult * delta
+		
+	cam_x = clampf(cam_x + lat_move + frame_pull, -1.0, 1.0)
 
 	# 코너 구간이면 기본으로 핸들이 돌아가고, A/D는 거기에 "추가로" 더 꺾는 방식
 	var k := curvature_at_scroll()
@@ -349,7 +388,11 @@ func update_fuel(delta: float) -> void:
 		fuel_ratio = 0.0
 		return
 	# 소모량 = (속도 km/h → km/s) × 소모율(L/km) × 밸런스 배율
-	var consumption := (speed / 3600.0) * fuel_rate * FUEL_DRAIN_MULT
+	var drain_mult := FUEL_DRAIN_MULT
+	if dur_drivetrain <= 0.0:
+		drain_mult *= 3.0  # 구동계 망가지면 연비 3배 악화
+		
+	var consumption := (speed / 3600.0) * fuel_rate * drain_mult
 	fuel = maxf(fuel - consumption * delta, 0.0)
 	fuel_ratio = fuel / fuel_max
 

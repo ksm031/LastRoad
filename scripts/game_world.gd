@@ -198,6 +198,7 @@ func _ready() -> void:
 	_loot_ui = _LootUIScript.new()
 	_loot_ui.inv = _inv_mgr
 	_loot_ui.meta = _meta
+	_loot_ui.vehicle = _vehicle
 	add_child(_loot_ui)
 	_loot_ui.loot_ui_closed.connect(func(): _hud.hide_loot_prompt())
 	_loot_ui.item_used.connect(_on_item_used)
@@ -447,6 +448,11 @@ func _process(delta: float) -> void:
 	# 라디오 죽음의 주파수: 정신력 -2/초 (GDD 18-radio.md)
 	if _hud.get_radio_on_death():
 		_sanity_ratio -= 0.02 * delta  # 2% per second
+
+	# ── 구동계 고장 진동 ──
+	if _vehicle.dur_drivetrain <= 0.0 and _vehicle.speed > 5.0:
+		if randf() < 2.0 * delta: # 초당 약 2회 정도 랜덤하게 덜컹거림
+			BillboardManager.add_impact_shake(0.15)
 	
 	
 	_sanity_ratio = clampf(_sanity_ratio, 0.0, 1.0)
