@@ -15,6 +15,7 @@ var inv: InventoryManager
 var upgrades: VehicleUpgradeSystem
 var meta: MetaProgression
 var vehicle: LastRoadVehicle
+var charm_sys: Node
 var current_stage: int = 1
 
 var _root: Control
@@ -60,6 +61,30 @@ func open(stage: int, p_upgrades: VehicleUpgradeSystem, p_meta: MetaProgression)
 	_switch_mode("shop")
 	_root.visible = true
 
+func _on_buy_charm_pressed() -> void:
+	if inv.money < 3000:
+		_info_label.text = "부적을 구매할 돈이 부족합니다."
+		return
+	if charm_sys == null:
+		return
+		
+	# 랜덤으로 1개 선택
+	var keys = charm_sys.CHARM_DB.keys()
+	var new_charm = keys[randi() % keys.size()]
+	
+	if charm_sys.has_charm(new_charm):
+		_info_label.text = "이미 가지고 있는 부적입니다. 다시 시도해보세요."
+		return
+		
+	inv.money -= 3000
+	_refresh_money()
+	
+	var added = charm_sys.add_charm(new_charm)
+	if added:
+		var data = charm_sys.get_charm_data(new_charm)
+		_info_label.text = "새로운 부적 획득: " + data.get("name", "")
+	# 실패했다면 꽉 차서 charm_full 시그널이 발동된 상태일 것임
+
 func close() -> void:
 	_root.visible = false
 	_return_held_item()
@@ -86,9 +111,10 @@ func _build_ui() -> void:
 	add_child(_root)
 	
 	var bg := ColorRect.new()
-	bg.color = Color(0.05, 0.05, 0.08, 0.95)
+	bg.color = Color(0.0, 0.0, 0.0, 0.97)
 	bg.set_anchors_preset(Control.PRESET_FULL_RECT)
 	_root.add_child(bg)
+	CrtTheme.add_scanline_overlay(_root)
 	
 	_shop_panel = Control.new()
 	_shop_panel.set_anchors_preset(Control.PRESET_FULL_RECT)
@@ -104,33 +130,27 @@ func _build_ui() -> void:
 
 	var title := Label.new()
 	title.text = "정 비 소"
-	title.add_theme_font_size_override("font_size", 28)
+	CrtTheme.style_label(title, 28, CrtTheme.AMBER_BRIGHT)
 	title.position = Vector2(STAT_X, PANEL_Y)
 	_shop_panel.add_child(title)
 
 	_money_lbl = Label.new()
-	_money_lbl.add_theme_font_size_override("font_size", 18)
-	_money_lbl.add_theme_color_override("font_color", Color(0.8, 0.8, 0.3))
+	CrtTheme.style_label(_money_lbl, 18, CrtTheme.AMBER)
 	_money_lbl.position = Vector2(STAT_X, PANEL_Y + 44)
 	_shop_panel.add_child(_money_lbl)
 
-	var stats_bg := ColorRect.new()
-	stats_bg.color = Color(0.08, 0.08, 0.12, 0.9)
-	stats_bg.position = Vector2(STAT_X, PANEL_Y + 72)
-	stats_bg.size = Vector2(230, 340)
-	_shop_panel.add_child(stats_bg)
+	CrtTheme.make_panel_bg(_shop_panel, Vector2(STAT_X, PANEL_Y + 72), Vector2(230, 570))
 
 	var stats_title := Label.new()
 	stats_title.text = "차량 업그레이드"
-	stats_title.add_theme_font_size_override("font_size", 14)
-	stats_title.add_theme_color_override("font_color", Color(0.4, 0.8, 1.0))
+	CrtTheme.style_label(stats_title, 14, CrtTheme.AMBER)
 	stats_title.position = Vector2(STAT_X + 8, PANEL_Y + 76)
 	_shop_panel.add_child(stats_title)
 
 	_upgrade_container = VBoxContainer.new()
 	_upgrade_container.position = Vector2(STAT_X + 8, PANEL_Y + 105)
 	_upgrade_container.size = Vector2(214, 300)
-	_upgrade_container.add_theme_constant_override("separation", 12)
+	_upgrade_container.add_theme_constant_override("separation", 4)
 	_shop_panel.add_child(_upgrade_container)
 
 	var part_info := {
@@ -149,15 +169,13 @@ func _build_ui() -> void:
 		# 1열: 부품 종류 이름
 		var type_lbl := Label.new()
 		type_lbl.text = part_info[pid]
-		type_lbl.add_theme_font_size_override("font_size", 10)
-		type_lbl.add_theme_color_override("font_color", Color(0.6, 0.6, 0.6))
+		CrtTheme.style_label(type_lbl, 10, CrtTheme.AMBER_DIM)
 		row.add_child(type_lbl)
 		
 		# 2열: 현재 부품 이름 (Flavor Name)
 		var name_lbl := Label.new()
 		name_lbl.text = "부품명"
-		name_lbl.add_theme_font_size_override("font_size", 13)
-		name_lbl.add_theme_color_override("font_color", Color(0.9, 0.9, 0.9))
+		CrtTheme.style_label(name_lbl, 13, CrtTheme.AMBER_BRIGHT)
 		_part_name_labels[pid] = name_lbl
 		row.add_child(name_lbl)
 		
@@ -168,7 +186,7 @@ func _build_ui() -> void:
 		for i in 5:
 			var pip := ColorRect.new()
 			pip.custom_minimum_size = Vector2(10, 6)
-			pip.color = Color(0.2, 0.2, 0.2)
+			pip.color = Color(0.10, 0.09, 0.05)
 			pips.add_child(pip)
 		_pip_containers[pid] = pips
 		h_box_gauge.add_child(pips)
@@ -177,8 +195,7 @@ func _build_ui() -> void:
 		
 		var stat_val_lbl := Label.new()
 		stat_val_lbl.text = "0.0"
-		stat_val_lbl.add_theme_font_size_override("font_size", 11)
-		stat_val_lbl.add_theme_color_override("font_color", Color(0.4, 0.9, 0.4))
+		CrtTheme.style_label(stat_val_lbl, 11, CrtTheme.GREEN_DATA)
 		_stat_labels[pid] = stat_val_lbl
 		h_box_gauge.add_child(stat_val_lbl)
 		row.add_child(h_box_gauge)
@@ -187,7 +204,7 @@ func _build_ui() -> void:
 		var up_btn := Button.new()
 		up_btn.text = "₩0"
 		up_btn.custom_minimum_size = Vector2(214, 28)
-		up_btn.add_theme_font_size_override("font_size", 11)
+		CrtTheme.style_button(up_btn, 11)
 		up_btn.pressed.connect(_on_upgrade_pressed.bind(pid))
 		_upgrade_btns[pid] = up_btn
 		row.add_child(up_btn)
@@ -196,17 +213,25 @@ func _build_ui() -> void:
 		var line_spacer := Control.new(); line_spacer.custom_minimum_size = Vector2(0, 4); _upgrade_container.add_child(line_spacer)
 
 	_info_label = Label.new()
-	_info_label.position = Vector2(STAT_X, PANEL_Y + 420)
-	_info_label.size = Vector2(230, 60)
+	_info_label.position = Vector2(260, 540)
+	_info_label.size = Vector2(316, 48)
 	_info_label.autowrap_mode = TextServer.AUTOWRAP_WORD
-	_info_label.add_theme_font_size_override("font_size", 13)
-	_info_label.add_theme_color_override("font_color", Color(1, 0.5, 0.5))
+	CrtTheme.style_label(_info_label, 13, CrtTheme.RED_WARN)
 	_shop_panel.add_child(_info_label)
+
+	var charm_btn := Button.new()
+	charm_btn.text = "부적 뽑기 (₩3000)"
+	charm_btn.position = Vector2(260, 600)
+	charm_btn.size = Vector2(316, 48)
+	CrtTheme.style_button(charm_btn, 16)
+	charm_btn.pressed.connect(_on_buy_charm_pressed)
+	_shop_panel.add_child(charm_btn)
 
 	var next_btn := Button.new()
 	next_btn.text = "정비 완료 →"
-	next_btn.position = Vector2(STAT_X, 660)
-	next_btn.size = Vector2(230, 48)
+	next_btn.position = Vector2(260, 655)
+	next_btn.size = Vector2(316, 48)
+	CrtTheme.style_button(next_btn, 16)
 	next_btn.pressed.connect(func(): _switch_mode("route"))
 	_shop_panel.add_child(next_btn)
 
@@ -214,14 +239,11 @@ func _build_ui() -> void:
 	const TRUNK_X := 260
 	const TRUNK_Y := PANEL_Y
 
-	var trunk_bg := ColorRect.new()
-	trunk_bg.color = Color(0.1, 0.12, 0.15, 0.9)
-	trunk_bg.position = Vector2(TRUNK_X, TRUNK_Y + 22)
-	trunk_bg.size = Vector2(TRUNK_COLS*(SLOT_W+SLOT_GAP)+16, TRUNK_ROWS*(SLOT_H+SLOT_GAP)+36)
-	_shop_panel.add_child(trunk_bg)
+	CrtTheme.make_panel_bg(_shop_panel, Vector2(TRUNK_X, TRUNK_Y + 22), Vector2(TRUNK_COLS*(SLOT_W+SLOT_GAP)+16, TRUNK_ROWS*(SLOT_H+SLOT_GAP)+36))
 
 	var tlbl = Label.new()
-	tlbl.text = "내 트렁크  (우클릭: 판매)"
+	tlbl.text = "내 트럭크  (우클릭: 판매)"
+	CrtTheme.style_label(tlbl, 14, CrtTheme.AMBER_MID)
 	tlbl.position = Vector2(TRUNK_X, TRUNK_Y + 4)
 	_shop_panel.add_child(tlbl)
 
@@ -237,7 +259,7 @@ func _build_ui() -> void:
 	discard_zone.position = Vector2(TRUNK_X, TRUNK_Y + 22 + 36 + trunk_grid_h + 4)
 	discard_zone.size = Vector2(TRUNK_COLS*(SLOT_W+SLOT_GAP)+16, 38)
 	var dbg = ColorRect.new()
-	dbg.color = Color(0.35, 0.08, 0.08, 0.85)
+	dbg.color = Color(0.20, 0.05, 0.03, 0.85)
 	dbg.set_anchors_preset(Control.PRESET_FULL_RECT)
 	discard_zone.add_child(dbg)
 	var dl = Label.new()
@@ -245,6 +267,7 @@ func _build_ui() -> void:
 	dl.set_anchors_preset(Control.PRESET_FULL_RECT)
 	dl.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	dl.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	CrtTheme.style_label(dl, 14, CrtTheme.RED_WARN)
 	discard_zone.add_child(dl)
 	discard_zone.gui_input.connect(func(ev):
 		if ev is InputEventMouseButton and ev.button_index == MOUSE_BUTTON_LEFT and ev.pressed:
@@ -256,14 +279,11 @@ func _build_ui() -> void:
 	const SHOP_X := 600
 	const SHOP_Y := PANEL_Y
 
-	var shop_bg := ColorRect.new()
-	shop_bg.color = Color(0.10, 0.13, 0.10, 0.9)
-	shop_bg.position = Vector2(SHOP_X, SHOP_Y + 22)
-	shop_bg.size = Vector2(SHOP_COLS*(SLOT_W+SLOT_GAP)+16, SHOP_ROWS*(SLOT_H+SLOT_GAP)+36)
-	_shop_panel.add_child(shop_bg)
+	CrtTheme.make_panel_bg(_shop_panel, Vector2(SHOP_X, SHOP_Y + 22), Vector2(SHOP_COLS*(SLOT_W+SLOT_GAP)+16, SHOP_ROWS*(SLOT_H+SLOT_GAP)+36))
 
 	var slbl = Label.new()
 	slbl.text = "상점  (우클릭: 구매)"
+	CrtTheme.style_label(slbl, 14, CrtTheme.AMBER_MID)
 	slbl.position = Vector2(SHOP_X, SHOP_Y + 4)
 	_shop_panel.add_child(slbl)
 
@@ -289,11 +309,12 @@ func _make_slot(pos: Vector2, ptype: String, idx: int) -> Control:
 	var s = Control.new()
 	s.position = pos
 	s.size = Vector2(SLOT_W, SLOT_H)
-	var bg = ColorRect.new(); bg.name="BG"; bg.size=s.size; bg.color=Color(0.2,0.2,0.2); bg.mouse_filter=Control.MOUSE_FILTER_IGNORE
+	var bg = ColorRect.new(); bg.name="BG"; bg.size=s.size; bg.color=CrtTheme.SLOT_EMPTY; bg.mouse_filter=Control.MOUSE_FILTER_IGNORE
 	s.add_child(bg)
 	var icon = TextureRect.new(); icon.name="Icon"; icon.size=s.size; icon.expand_mode=TextureRect.EXPAND_IGNORE_SIZE; icon.stretch_mode=TextureRect.STRETCH_KEEP_ASPECT_CENTERED; icon.mouse_filter=Control.MOUSE_FILTER_IGNORE
 	s.add_child(icon)
-	var lbl = Label.new(); lbl.name="Val"; lbl.size=s.size; lbl.horizontal_alignment=HORIZONTAL_ALIGNMENT_RIGHT; lbl.vertical_alignment=VERTICAL_ALIGNMENT_BOTTOM; lbl.add_theme_font_size_override("font_size", 10); lbl.add_theme_color_override("font_color", Color(1,1,0))
+	var lbl = Label.new(); lbl.name="Val"; lbl.size=s.size; lbl.horizontal_alignment=HORIZONTAL_ALIGNMENT_RIGHT; lbl.vertical_alignment=VERTICAL_ALIGNMENT_BOTTOM
+	CrtTheme.style_label(lbl, 10, CrtTheme.AMBER)
 	s.add_child(lbl)
 	s.gui_input.connect(_on_slot_input.bind(ptype, idx))
 	return s
@@ -339,9 +360,9 @@ func _refresh_upgrades() -> void:
 		var pips = _pip_containers[pid].get_children()
 		for i in 5:
 			if i < lv:
-				pips[i].color = Color(0.4, 0.8, 1.0) # 활성화 (파랑)
+				pips[i].color = CrtTheme.AMBER_BRIGHT
 			else:
-				pips[i].color = Color(0.15, 0.15, 0.15) # 비활성화
+				pips[i].color = Color(0.10, 0.09, 0.05)
 		
 		# 3. 현재 스탯 표시
 		var cur_stat_str := ""
@@ -402,7 +423,7 @@ func _refresh_slot(s: Control, item_id: String) -> void:
 	var icon: TextureRect = s.get_node("Icon")
 	var lbl: Label = s.get_node("Val")
 	if item_id == "":
-		bg.color = Color(0.2, 0.2, 0.2); bg.size = Vector2(SLOT_W, SLOT_H); icon.texture = null; lbl.text = ""; s.z_index = 0; return
+		bg.color = CrtTheme.SLOT_EMPTY; bg.size = Vector2(SLOT_W, SLOT_H); icon.texture = null; lbl.text = ""; s.z_index = 0; return
 	
 	var data = inv.get_item_data(item_id) if inv else {}
 	bg.color = data.get("color", Color(0.5,0.5,0.5)).darkened(0.3)
@@ -614,15 +635,13 @@ func _build_routes() -> void:
 
 	var title = Label.new()
 	title.text = "경로 선택"
-	title.add_theme_font_size_override("font_size", 28)
-	title.add_theme_color_override("font_color", Color(0.9, 0.85, 0.7))
+	CrtTheme.style_label(title, 28, CrtTheme.AMBER_BRIGHT)
 	title.position = Vector2(MAP_LEFT, 80)
 	_route_panel.add_child(title)
 
 	var stage_lbl = Label.new()
 	stage_lbl.text = "스테이지 %d → %d" % [current_stage, current_stage + 1]
-	stage_lbl.add_theme_font_size_override("font_size", 18)
-	stage_lbl.add_theme_color_override("font_color", Color(0.5, 0.5, 0.5))
+	CrtTheme.style_label(stage_lbl, 18, CrtTheme.AMBER_DIM)
 	stage_lbl.position = Vector2(MAP_LEFT, 115)
 	_route_panel.add_child(stage_lbl)
 
@@ -630,6 +649,7 @@ func _build_routes() -> void:
 	_back_btn.text = "← 정비소로"
 	_back_btn.position = Vector2(MAP_RIGHT - 130, 80)
 	_back_btn.size = Vector2(130, 36)
+	CrtTheme.style_button(_back_btn, 14)
 	_back_btn.pressed.connect(func(): _switch_mode("shop"))
 	_route_panel.add_child(_back_btn)
 
@@ -652,8 +672,7 @@ func _build_routes() -> void:
 
 	_tooltip_lbl = Label.new()
 	_tooltip_lbl.visible = false
-	_tooltip_lbl.add_theme_font_size_override("font_size", 16)
-	_tooltip_lbl.add_theme_color_override("font_color", Color(1, 1, 1))
+	CrtTheme.style_label(_tooltip_lbl, 16, CrtTheme.AMBER_BRIGHT)
 	_tooltip_lbl.z_index = 50
 	_route_panel.add_child(_tooltip_lbl)
 
@@ -782,11 +801,11 @@ func _on_map_draw() -> void:
 			var from_idx = _map_nodes.find(nd)
 			var line_color: Color
 			if from_idx in _visited_nodes and c_idx in _visited_nodes:
-				line_color = Color(0.7, 0.65, 0.4, 0.9)  # 지나온 길
+				line_color = Color(0.93, 0.85, 0.55, 0.9)
 			elif from_idx == _player_node_idx and c_idx in _selectable_nodes:
-				line_color = Color(0.5, 0.48, 0.38, 0.7)  # 선택 가능
+				line_color = Color(0.75, 0.70, 0.45, 0.8)
 			else:
-				line_color = Color(0.22, 0.22, 0.28, 0.3)
+				line_color = Color(0.45, 0.40, 0.25, 0.5)
 			_draw_bezier(from_pos, to_pos, line_color, 1.5)
 
 	# 노드
@@ -803,8 +822,8 @@ func _on_map_draw() -> void:
 
 		if is_player:
 			# 현재 위치 — 밝은 흰색 + 펄스
-			_map_draw.draw_circle(nd.pos, radius + 2, Color(1, 1, 1, 0.9))
-			_map_draw.draw_arc(nd.pos, radius + 5, 0, TAU, 32, Color(1, 1, 1, 0.3), 2.0)
+			_map_draw.draw_circle(nd.pos, radius + 2, CrtTheme.AMBER_BRIGHT)
+			_map_draw.draw_arc(nd.pos, radius + 5, 0, TAU, 32, Color(0.93, 0.85, 0.55, 0.3), 2.0)
 			# 차 아이콘 표시
 			if _car_icon_tex != null:
 				var icon_h := 28.0
@@ -814,7 +833,7 @@ func _on_map_draw() -> void:
 		elif is_visited:
 			# 지나온 노드 — 어둡게 표시
 			_map_draw.draw_circle(nd.pos, radius * 0.7, col_color.darkened(0.4))
-			_map_draw.draw_arc(nd.pos, radius * 0.7 + 1, 0, TAU, 24, Color(0.7, 0.65, 0.4, 0.5), 1.5)
+			_map_draw.draw_arc(nd.pos, radius * 0.7 + 1, 0, TAU, 24, CrtTheme.AMBER_DIM, 1.5)
 		elif is_end:
 			_map_draw.draw_circle(nd.pos, radius, Color(0.9, 0.8, 0.3, 0.8))
 			_map_draw.draw_arc(nd.pos, radius + 2, 0, TAU, 32, Color(0.9, 0.8, 0.3, 0.4), 2.0)

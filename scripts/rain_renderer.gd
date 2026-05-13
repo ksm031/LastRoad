@@ -121,6 +121,11 @@ func _on_glass_draw() -> void:
 
 # ── 공개 API ────────────────────────────────────────────────
 func start_rain() -> void:
+	# 이전 스테이지의 흔적(성애 마스크) 초기화
+	_mask_vp.render_target_clear_mode = SubViewport.CLEAR_MODE_ALWAYS
+	await get_tree().process_frame
+	_mask_vp.render_target_clear_mode = SubViewport.CLEAR_MODE_NEVER
+	
 	is_raining = true
 	_bb.visible = true
 	_glass.visible = true
@@ -131,9 +136,12 @@ func hide_glass_effects() -> void:
 	for i in MAX_DROPS:
 		_dr[i] = 0.0
 	_push_drops_to_shader()
+	
+	# 성애 마스크 초기화
 	_mask_vp.render_target_clear_mode = SubViewport.CLEAR_MODE_ALWAYS
 	await get_tree().process_frame
 	_mask_vp.render_target_clear_mode = SubViewport.CLEAR_MODE_NEVER
+	
 	_bb.visible = false
 	_glass.visible = false
 

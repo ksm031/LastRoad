@@ -8,7 +8,7 @@ const BillboardManager = preload("res://scripts/billboard_manager.gd")
 var SPACING_Z      := 35.0    # 실제값은 spawn_config.gd에서 주입
 var SPAWN_CHANCE   := 0.42
 var seed_offset    := 0       # 스테이지마다 다른 배치를 위한 시드 오프셋
-const VISIBLE_DZ_MIN := 0.001
+const VISIBLE_DZ_MIN := -1.0
 const VISIBLE_DZ_MAX := 85.0
 
 # ── 충돌 튜닝 ────────────────────────────────────────────────
@@ -35,28 +35,26 @@ var _anim_time: float = 0.0
 var _hit_info  : Dictionary = {} # key(int) -> { until_z: float, hit_time: float }
 var _light_pool: LightMaterialPool
 var billboard_mgr: BillboardManager
-const POOL_SIZE := 24
+const POOL_SIZE := 20
+var jiwon_info: Dictionary = {}
 
 func _ready() -> void:
-	var idle_sheet := load("res://Asset/Image/monster/eyes_idle_sheet.png") as Texture2D
-	if idle_sheet != null:
-		var fw := idle_sheet.get_width() / 4
-		var fh := idle_sheet.get_height()
-		for i in 4:
-			var atlas := AtlasTexture.new()
-			atlas.atlas = idle_sheet
-			atlas.region = Rect2(i * fw, 0, fw, fh)
-			_idle_textures.append(atlas)
+	pass
+
+func load_assets() -> void:
+	if not _idle_textures.is_empty(): return
 	
-	var down_sheet := load("res://Asset/Image/monster/eyes_down_sheet.png") as Texture2D
-	if down_sheet != null:
-		var fw := down_sheet.get_width() / 8
-		var fh := down_sheet.get_height()
-		for i in 8:
-			var atlas := AtlasTexture.new()
-			atlas.atlas = down_sheet
-			atlas.region = Rect2(i * fw, 0, fw, fh)
-			_down_textures.append(atlas)
+	# idle: watcher_idle_01 ~ 04
+	for i in range(1, 5):
+		var t := BillboardManager.load_with_normal("res://Asset/Image/Character/watcher_idle_%02d.png" % i)
+		if t:
+			_idle_textures.append(t)
+	
+	# down: watcher_down_01 ~ 06
+	for i in range(1, 7):
+		var t := BillboardManager.load_with_normal("res://Asset/Image/Character/watcher_down_%02d.png" % i)
+		if t:
+			_down_textures.append(t)
 			
 	if _idle_textures.size() > 0:
 		_texture = _idle_textures[0]
@@ -84,25 +82,30 @@ func update_state(p_scroll_z: float, p_lane_x: float, p_curve_x: PackedFloat32Ar
 	_headlight_range = p_headlight_range
 	_update_billboards()
 
-# ── 충돌 체크 ────────────────────────────────────────────────
+const OBJECT_WIDTH     := 0.9     # 와쳐 자체 너비
+
 func check_collision(vehicle: LastRoadVehicle) -> bool:
 	_prune_hits()
 	if _texture == null:
 		return false
 	
 	var hit := false
-	var lane := clampi(int(round(vehicle.cam_x)), -1, 1)
 	var k0 := int(floor(scroll_z / SPACING_Z)) - 1
 	var k1 := k0 + 4
+	
+	# 통합 충돌 범위 계산: (차폭 + 오브젝트폭) / 2
+	var threshold := (vehicle.COLLISION_WIDTH + OBJECT_WIDTH) * 0.5
+	
 	for k in range(k0, k1 + 1):
 		var o := _watcher_at_k(k)
 		if o.is_empty():
 			continue
-		if int(o["lane"]) != lane:
+		
+		if abs(float(o["lane"]) - vehicle.cam_x) > threshold:
 			continue
 		var wz := float(o["wz"])
 		var dz := wz - scroll_z
-		if dz <= 0.0 or dz > VISIBLE_DZ_MAX:
+		if dz < 0.0 or dz > HIT_DZ:
 			continue
 		if _is_hit_active(k):
 			continue
@@ -136,8 +139,23 @@ func _watcher_at_k(k: int) -> Dictionary:
 	var r := BillboardManager.get_rand01(k * 13331 + 7, seed_offset)
 	if r > SPAWN_CHANCE:
 		return {}
-	var lane := int(floor(BillboardManager.get_rand01(k * 13331 + 53, seed_offset) * 3.0)) - 1  # -1, 0, 1
+	var lane := int(floor(BillboardManager.get_rand01(k * 13331 + 53, seed_offset) * 3.0)) - 1
 	var wz := float(k) * SPACING_Z + 20.0 + BillboardManager.get_rand01(k * 13331 + 101, seed_offset) * 10.0
+	
+	if jiwon_info.has("wz"):
+		var j_wz: float = jiwon_info["wz"]
+		var j_lane: int = jiwon_info["lane"]
+		
+		# 1. 안전 간격 유지 (지원 기준 앞뒤 40m 내에는 스폰 금지)
+		if absf(wz - j_wz) < 40.0:
+			return {}
+			
+		# 2. 제일 가까운 앞쪽 적 캐릭터가 같은 차선에 없도록 강제 변경
+		if wz > j_wz and wz < j_wz + 120.0:
+			if lane == j_lane:
+				lane = j_lane + 1
+				if lane > 1: lane = -1
+				
 	return { "k": k, "lane": lane, "wz": wz }
 
 
@@ -157,7 +175,7 @@ func _update_billboards() -> void:
 		var dz := wz - scroll_z
 		
 		var is_hit = _is_hit_active(k)
-		if not is_hit and (dz <= 0.0 or dz > VISIBLE_DZ_MAX):
+		if not is_hit and (dz <= -1.0 or dz > VISIBLE_DZ_MAX):
 			continue
 			
 		var render_dz = dz

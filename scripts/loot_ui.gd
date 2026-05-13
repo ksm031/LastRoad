@@ -174,17 +174,17 @@ func _build_ui() -> void:
 
 	# 어두운 오버레이
 	var overlay := ColorRect.new()
-	overlay.color = Color(0.05, 0.05, 0.07, 0.88)
+	overlay.color = Color(0.0, 0.0, 0.0, 0.97)
 	overlay.set_anchors_preset(Control.PRESET_FULL_RECT)
 	overlay.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	_root.add_child(overlay)
+	CrtTheme.add_scanline_overlay(_root)
 
 	# ── 제목 ──
 	_title_lbl = Label.new()
 	_title_lbl.text = "갓길 수색"
 	_title_lbl.position = Vector2(20, 12)
-	_title_lbl.add_theme_font_size_override("font_size", 22)
-	_title_lbl.add_theme_color_override("font_color", Color(0.95, 0.85, 0.5))
+	CrtTheme.style_label(_title_lbl, 22, CrtTheme.AMBER_BRIGHT)
 	_root.add_child(_title_lbl)
 
 	# 닫기 버튼
@@ -192,6 +192,8 @@ func _build_ui() -> void:
 	_close_btn.text = "✕ 닫기"
 	_close_btn.position = Vector2(1180, 8)
 	_close_btn.size = Vector2(90, 36)
+	_close_btn.z_index = 50
+	CrtTheme.style_button(_close_btn, 14)
 	_close_btn.pressed.connect(close)
 	_root.add_child(_close_btn)
 
@@ -216,8 +218,8 @@ func _build_ui() -> void:
 	_tooltip_panel.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	_tooltip_panel.z_index = 20
 	var tip_style := StyleBoxFlat.new()
-	tip_style.bg_color = Color(0.06, 0.07, 0.09, 0.97)
-	tip_style.border_color = Color(0.55, 0.45, 0.25, 1.0)
+	tip_style.bg_color = Color(0.02, 0.02, 0.01, 0.97)
+	tip_style.border_color = CrtTheme.AMBER_BORDER
 	tip_style.border_width_left = 1; tip_style.border_width_top = 1
 	tip_style.border_width_right = 1; tip_style.border_width_bottom = 1
 	tip_style.content_margin_left = 10; tip_style.content_margin_right = 10
@@ -227,23 +229,19 @@ func _build_ui() -> void:
 	tip_vbox.add_theme_constant_override("separation", 3)
 	_tooltip_panel.add_child(tip_vbox)
 	_tooltip_name_lbl = Label.new()
-	_tooltip_name_lbl.add_theme_font_size_override("font_size", 15)
-	_tooltip_name_lbl.add_theme_color_override("font_color", Color(1.0, 0.92, 0.65))
+	CrtTheme.style_label(_tooltip_name_lbl, 15, CrtTheme.AMBER_BRIGHT)
 	tip_vbox.add_child(_tooltip_name_lbl)
 	var sep := HSeparator.new()
-	sep.add_theme_color_override("color", Color(0.4, 0.35, 0.2, 0.8))
+	sep.add_theme_color_override("color", CrtTheme.AMBER_DIM)
 	tip_vbox.add_child(sep)
 	_tooltip_type_lbl = Label.new()
-	_tooltip_type_lbl.add_theme_font_size_override("font_size", 12)
-	_tooltip_type_lbl.add_theme_color_override("font_color", Color(0.7, 0.7, 0.7))
+	CrtTheme.style_label(_tooltip_type_lbl, 12, CrtTheme.AMBER_MID)
 	tip_vbox.add_child(_tooltip_type_lbl)
 	_tooltip_size_lbl = Label.new()
-	_tooltip_size_lbl.add_theme_font_size_override("font_size", 11)
-	_tooltip_size_lbl.add_theme_color_override("font_color", Color(0.5, 0.6, 0.7))
+	CrtTheme.style_label(_tooltip_size_lbl, 11, CrtTheme.AMBER_DIM)
 	tip_vbox.add_child(_tooltip_size_lbl)
 	_tooltip_val_lbl = Label.new()
-	_tooltip_val_lbl.add_theme_font_size_override("font_size", 13)
-	_tooltip_val_lbl.add_theme_color_override("font_color", Color(0.9, 0.85, 0.3))
+	CrtTheme.style_label(_tooltip_val_lbl, 13, CrtTheme.AMBER)
 	tip_vbox.add_child(_tooltip_val_lbl)
 	_root.add_child(_tooltip_panel)
 
@@ -269,27 +267,25 @@ func _build_trunk_panel() -> void:
 	var bg := ColorRect.new()
 	bg.position = Vector2(panel_x - 6, panel_y - 30)
 	bg.size = Vector2(TRUNK_COLS * (SLOT_W + SLOT_GAP) + 12, 24 + TRUNK_ROWS * (SLOT_H + SLOT_GAP) + 60)
-	bg.color = Color(0.10, 0.12, 0.15, 0.9)
+	bg.color = CrtTheme.BG_PANEL
 	_root.add_child(bg)
 
 	var lbl := Label.new()
-	lbl.text = "내 차 트렁크"
+	lbl.text = "내 차 트럭크"
 	lbl.position = Vector2(panel_x, panel_y - 26)
-	lbl.add_theme_font_size_override("font_size", 14)
-	lbl.add_theme_color_override("font_color", Color(0.7, 0.9, 1.0))
+	CrtTheme.style_label(lbl, 14, CrtTheme.AMBER)
 	_root.add_child(lbl)
 
 	_trunk_count_lbl = Label.new()
 	_trunk_count_lbl.position = Vector2(panel_x + 100, panel_y - 26)
-	_trunk_count_lbl.add_theme_font_size_override("font_size", 13)
-	_trunk_count_lbl.add_theme_color_override("font_color", Color(0.7, 0.7, 0.7))
+	CrtTheme.style_label(_trunk_count_lbl, 13, CrtTheme.AMBER_DIM)
 	_root.add_child(_trunk_count_lbl)
 
 	_sort_btn = Button.new()
 	_sort_btn.text = "정리"
 	_sort_btn.position = Vector2(panel_x + 220, panel_y - 30)
 	_sort_btn.size = Vector2(50, 24)
-	_sort_btn.add_theme_font_size_override("font_size", 12)
+	CrtTheme.style_button(_sort_btn, 12)
 	_sort_btn.pressed.connect(func():
 		inv.sort_trunk()
 		_refresh_trunk_ui()
@@ -321,21 +317,19 @@ func _build_wreck_panel() -> void:
 	_wreck_panel_bg = ColorRect.new()
 	_wreck_panel_bg.position = Vector2(panel_x - 6, panel_y - 30)
 	_wreck_panel_bg.size = Vector2(grid_w + 12, panel_h + 30)
-	_wreck_panel_bg.color = Color(0.10, 0.12, 0.15, 0.9)
+	_wreck_panel_bg.color = CrtTheme.BG_PANEL
 	_root.add_child(_wreck_panel_bg)
 
 	var lbl := Label.new()
 	lbl.text = "폐차 인벤토리"
 	lbl.position = Vector2(panel_x, panel_y - 26)
-	lbl.add_theme_font_size_override("font_size", 14)
-	lbl.add_theme_color_override("font_color", Color(1.0, 0.8, 0.6))
+	CrtTheme.style_label(lbl, 14, CrtTheme.AMBER)
 	_root.add_child(lbl)
 
 	_search_lbl = Label.new()
 	_search_lbl.text = ""
 	_search_lbl.position = Vector2(panel_x + 170, panel_y - 26)
-	_search_lbl.add_theme_font_size_override("font_size", 13)
-	_search_lbl.add_theme_color_override("font_color", Color(0.6, 1.0, 0.6))
+	CrtTheme.style_label(_search_lbl, 13, CrtTheme.GREEN_DATA)
 	_root.add_child(_search_lbl)
 
 	# 스크롤 클립 영역
@@ -386,7 +380,7 @@ func _build_discard_zone() -> void:
 	_discard_zone.mouse_filter = Control.MOUSE_FILTER_STOP
 
 	var bg := ColorRect.new()
-	bg.color = Color(0.55, 0.10, 0.10, 0.85)
+	bg.color = Color(0.20, 0.05, 0.03, 0.85)
 	bg.size = Vector2(380, 44)
 	bg.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	_discard_zone.add_child(bg)
@@ -398,7 +392,7 @@ func _build_discard_zone() -> void:
 	lbl.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	lbl.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
 	lbl.add_theme_font_size_override("font_size", 15)
-	lbl.add_theme_color_override("font_color", Color(1.0, 0.7, 0.7))
+	CrtTheme.style_label(lbl, 15, CrtTheme.RED_WARN)
 	lbl.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	_discard_zone.add_child(lbl)
 
@@ -422,7 +416,7 @@ func _make_slot_node(pos: Vector2, panel_type: String, idx: int) -> Control:
 	var bg := ColorRect.new()
 	bg.name = "BG"
 	bg.size = Vector2(SLOT_W, SLOT_H)
-	bg.color = Color(0.18, 0.18, 0.22)
+	bg.color = CrtTheme.SLOT_EMPTY
 	bg.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	s.add_child(bg)
 
@@ -443,7 +437,7 @@ func _make_slot_node(pos: Vector2, panel_type: String, idx: int) -> Control:
 	name_lbl.size = Vector2(SLOT_W - 4, SLOT_H - 18)
 	name_lbl.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	name_lbl.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
-	name_lbl.add_theme_font_size_override("font_size", 10)
+	CrtTheme.style_label(name_lbl, 10, CrtTheme.AMBER_DIM)
 	name_lbl.clip_text = true
 	name_lbl.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	s.add_child(name_lbl)
@@ -453,8 +447,7 @@ func _make_slot_node(pos: Vector2, panel_type: String, idx: int) -> Control:
 	val_lbl.position = Vector2(2, SLOT_H - 16)
 	val_lbl.size = Vector2(SLOT_W - 4, 14)
 	val_lbl.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
-	val_lbl.add_theme_font_size_override("font_size", 9)
-	val_lbl.add_theme_color_override("font_color", Color(0.9, 0.9, 0.4))
+	CrtTheme.style_label(val_lbl, 9, CrtTheme.AMBER)
 	val_lbl.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	s.add_child(val_lbl)
 
@@ -504,10 +497,10 @@ func _apply_slot_state(slot: Control, item_id: String, revealed: bool) -> void:
 
 	if not revealed:
 		if bg:
-			bg.color = Color(0.12, 0.12, 0.16)
+			bg.color = Color(0.07, 0.06, 0.04)
 			bg.size = Vector2(SLOT_W, SLOT_H)
 		if name_lbl: name_lbl.text = "?"
-		if name_lbl: name_lbl.add_theme_color_override("font_color", Color(0.4, 0.4, 0.4))
+		if name_lbl: name_lbl.add_theme_color_override("font_color", CrtTheme.AMBER_DIM)
 		if val_lbl: val_lbl.text = ""
 		var icon0 := slot.get_node_or_null("Icon") as TextureRect
 		if icon0: icon0.visible = false
@@ -516,7 +509,7 @@ func _apply_slot_state(slot: Control, item_id: String, revealed: bool) -> void:
 
 	if item_id == "":
 		if bg:
-			bg.color = Color(0.13, 0.14, 0.17)
+			bg.color = CrtTheme.SLOT_EMPTY
 			bg.size = Vector2(SLOT_W, SLOT_H)
 		if name_lbl: name_lbl.text = ""
 		if val_lbl: val_lbl.text = ""

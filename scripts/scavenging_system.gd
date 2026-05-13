@@ -23,7 +23,11 @@ var _light_pool: LightMaterialPool
 const POOL_SIZE := 50
 
 func _ready() -> void:
-	_tex_car = load("res://Asset/Image/object/Scrapped_car.png") as Texture2D
+	pass
+
+func load_assets() -> void:
+	if _tex_car != null: return
+	_tex_car = BillboardManager.load_with_normal("res://Asset/Image/object/Scrapped_car.png")
 	_light_pool = LightMaterialPool.new(POOL_SIZE, _AMBIENT_NORMAL, _AMBIENT_DARK)
 
 const _AMBIENT_NORMAL := Color(0.42, 0.40, 0.38, 1.0)
@@ -76,7 +80,7 @@ func _update_billboards() -> void:
 		var flip_h := (side == 1)
 		
 		var mat := _light_pool.get_material(float(proj.light_h)) if _light_pool else null
-		billboard_mgr.add_entry(depth, rect, _tex_car, fade, mat, Color.WHITE, flip_h)
+		billboard_mgr.add_entry(depth, rect, _tex_car, fade, mat, Color.WHITE, flip_h, float(proj.light_h), float(proj.ground_y))
 
 
 

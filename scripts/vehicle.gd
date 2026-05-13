@@ -14,6 +14,7 @@ const MAX_SPEED_BASE     := 90.0    # km/h (초반엔 많이 부족하게 설정
 const ACCEL_BASE         := 5.0     # km/h/s
 const BRAKE_FORCE_BASE   := 40.0    # km/h/s
 const LATERAL_SPEED_BASE := 1.8     # cam_x(차선) 단위/초
+const COLLISION_WIDTH    := 0.6     # 차폭 (차선 단위)
 
 # ── 실제 적용되는 스탯 (업그레이드 반영) ───────────────────────
 var max_speed     : float = MAX_SPEED_BASE
@@ -23,6 +24,7 @@ var lateral_speed : float = LATERAL_SPEED_BASE
 var fuel_max      : float = FUEL_MAX_BASE
 var fuel_rate     : float = FUEL_RATE_BASE
 var headlight_range : float = 1.0
+var traction_factor : float = 1.0  # 1.0 = 정상, < 1.0 = 미끄러움
 
 # ── 연료 파라미터 ────────────────────────────────────────────
 # ── 연료 파라미터 ────────────────────────────────────────────
@@ -315,8 +317,8 @@ func handle_input(delta: float) -> void:
 	var grade := hill_grade()
 	speed = clampf(speed + grade * HILL_ACCEL_FACTOR * delta, 0.0, effective_max * 1.1)
 
-	# 차량 속도에 비례하여 좌우 조향(차선 변경) 속도 조절
-	var lateral_mult := clampf(speed / 50.0, 0.0, 1.0)
+	# 차량 속도에 비례하여 좌우 조향(차선 변경) 속도 조절 (비 올 때 traction_factor 반영)
+	var lateral_mult := clampf(speed / 50.0, 0.0, 1.0) * traction_factor
 	if a:
 		cam_x = maxf(cam_x - lateral_speed * lateral_mult * delta, -1.0)
 	elif d:
@@ -331,10 +333,10 @@ func handle_input(delta: float) -> void:
 		target_off = -PLAYER_STEER_MAX_DEG
 	elif d:
 		target_off = PLAYER_STEER_MAX_DEG
-	_player_steer_offset = move_toward(_player_steer_offset, target_off, STEER_SPEED * delta)
+	_player_steer_offset = move_toward(_player_steer_offset, target_off, STEER_SPEED * delta * traction_factor)
 
 	var target_steer := clampf(auto + _player_steer_offset, -MAX_STEER_DEG, MAX_STEER_DEG)
-	steering_angle = move_toward(steering_angle, target_steer, STEER_SPEED * delta)
+	steering_angle = move_toward(steering_angle, target_steer, STEER_SPEED * delta * traction_factor)
 
 func update_scroll(delta: float) -> void:
 	scroll_z += speed * SCROLL_RATE * delta

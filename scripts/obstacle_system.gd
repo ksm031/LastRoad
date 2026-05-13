@@ -6,7 +6,7 @@ const BillboardManager = preload("res://scripts/billboard_manager.gd")
 var SPACING_Z        := 18.0    # 실제값은 spawn_config.gd에서 주입
 var SPAWN_CHANCE     := 0.25
 var seed_offset      := 0     # 스테이지마다 다른 배치를 위한 시드 오프셋
-const VISIBLE_DZ_MIN   := 0.05
+const VISIBLE_DZ_MIN   := -1.0
 const VISIBLE_DZ_MAX   := 90.0
 
 # ── 충돌 튜닝 ────────────────────────────────────────────────
@@ -24,10 +24,16 @@ var billboard_mgr: BillboardManager
 var _hit_until_z: Dictionary = {}
 var _light_pool: LightMaterialPool
 const POOL_SIZE := 60
+var jiwon_info: Dictionary = {}
 
 func _ready() -> void:
+	pass
+
+func load_assets() -> void:
+	if not _textures.is_empty(): return
+	
 	for i in range(1, 10):
-		var t := load("res://Asset/Image/Obstacle/rock_%02d.png" % i) as Texture2D
+		var t := BillboardManager.load_with_normal("res://Asset/Image/Obstacle/rock_%02d.png" % i)
 		if t:
 			_textures.append(t)
 	
@@ -48,19 +54,25 @@ func update_state(p_scroll_z: float, p_lane_x: float, p_curve_x: PackedFloat32Ar
 	_headlight_range = p_headlight_range
 	_update_billboards()
 
+const OBJECT_WIDTH     := 0.9     # 오브젝트 자체 너비
+
 func check_collision(vehicle: LastRoadVehicle) -> bool:
 	if _textures.is_empty():
 		return false
 	_prune_hits()
 	var hit := false
-	var lane := clampi(int(round(vehicle.cam_x)), -1, 1)
 	var k0 := int(floor(scroll_z / SPACING_Z)) - 1
 	var k1 := k0 + 4
+	
+	# 통합 충돌 범위 계산: (차폭 + 오브젝트폭) / 2
+	var threshold := (vehicle.COLLISION_WIDTH + OBJECT_WIDTH) * 0.5
+	
 	for k in range(k0, k1 + 1):
 		var o := _obstacle_at_k(k)
 		if o.is_empty():
 			continue
-		if int(o["lane"]) != lane:
+		
+		if abs(float(o["lane"]) - vehicle.cam_x) > threshold:
 			continue
 		var wz := float(o["wz"])
 		var dz := wz - scroll_z
@@ -92,6 +104,21 @@ func _obstacle_at_k(k: int) -> Dictionary:
 	elif lane_r > 0.66: lane = 1
 	var jitter := (BillboardManager.get_rand01(k * 9876 + 233, seed_offset) - 0.5) * 0.15
 	var wz := float(k) * SPACING_Z + 10.0 + BillboardManager.get_rand01(k * 7919 + 203, seed_offset) * 8.0
+	
+	if jiwon_info.has("wz"):
+		var j_wz: float = jiwon_info["wz"]
+		var j_lane: int = jiwon_info["lane"]
+		
+		# 1. 안전 간격 유지 (지원 기준 앞뒤 40m 내에는 스폰 금지)
+		if absf(wz - j_wz) < 40.0:
+			return {}
+			
+		# 2. 제일 가까운 앞쪽 장애물(40m ~ 120m)이 같은 차선에 없도록 강제 변경
+		if wz > j_wz and wz < j_wz + 120.0:
+			if lane == j_lane:
+				lane = j_lane + 1
+				if lane > 1: lane = -1
+				
 	var tidx := clampi(int(floor(BillboardManager.get_rand01(k * 7919 + 409, seed_offset) * float(_textures.size()))), 0, _textures.size() - 1)
 	return {
 		"k": k, "lane": lane, "jitter": jitter, "wz": wz, "tidx": tidx,
@@ -111,7 +138,7 @@ func _update_billboards() -> void:
 			continue
 		var wz := float(o["wz"])
 		var dz := wz - scroll_z
-		if dz <= 0.0 or dz > VISIBLE_DZ_MAX:
+		if dz <= -1.0 or dz > VISIBLE_DZ_MAX:
 			continue
 		var proj := BillboardManager.calculate_projection(dz, cam_x, _curve_x, hill_px, _headlight_range)
 		var depth: float = proj.depth

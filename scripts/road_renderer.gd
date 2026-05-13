@@ -23,32 +23,49 @@ func _ready() -> void:
 	shader.code = """
 shader_type canvas_item;
 render_mode blend_add;
+
 uniform vec4 light_color : source_color = vec4(1.0, 0.90, 0.55, 1.0);
 uniform float intensity : hint_range(0.0, 5.0) = 1.5;
+uniform float flicker : hint_range(0.0, 2.0) = 1.0;
+uniform float lightning : hint_range(0.0, 2.0) = 0.0;
+uniform float scroll_z;
+
+// Simple hash for noise
+float hash(vec2 p) {
+    return fract(sin(dot(p, vec2(12.9898, 78.233))) * 43758.5453);
+}
+
+float noise(vec2 p) {
+    vec2 i = floor(p);
+    vec2 f = fract(p);
+    float a = hash(i);
+    float b = hash(i + vec2(1.0, 0.0));
+    float c = hash(i + vec2(0.0, 1.0));
+    float d = hash(i + vec2(1.0, 1.0));
+    vec2 u = f * f * (3.0 - 2.0 * f);
+    return mix(a, b, u.x) + (c - a) * u.y * (1.0 - u.x) + (d - b) * u.x * u.y;
+}
+
 void fragment() {
 	vec2 uv = UV;
 	float x = uv.x - 0.5;
-	
-	// y=0(지평선), y=1(화면 하단)
 	float y_raw = uv.y; 
-	
-	// 대시보드에 가려지는 아래쪽을 무시하고, 시야에 보이는 부분(y=0.5 주변)이 가장 밝도록 보정
-	// 0.0(지평선) ~ 1.0(차 바로 앞 시야)
 	float y = smoothstep(0.0, 0.5, y_raw); 
 	
-	// 부채꼴 형태 (멀어질수록 좁아짐)
+	// 1. 기본 헤드라이트 원뿔
 	float cone_width = 0.15 + 0.55 * y;
 	float cone = smoothstep(cone_width, cone_width - 0.3, abs(x));
-	
-	// 거리 감쇄 (먼 곳은 부드럽게, 가까운 곳은 강렬하게)
-	// 지수를 낮추어(1.2 -> 0.6) 더 먼 곳까지 빛이 강하게 도달하게 함
 	float falloff = pow(y, 0.6); 
-	
-	// 중앙 집중 광선 (강력한 코어)
 	float core = smoothstep(0.2, 0.0, abs(x)) * 0.7 * y;
 	
-	float brightness = (cone + core) * falloff * intensity;
-	COLOR = vec4(light_color.rgb * brightness, brightness * 0.9);
+	// 전체 밝기 균형 조정
+	float final_int = (cone * 0.8 + core * 0.5) * falloff * intensity * flicker;
+	
+	// 번개 효과: 화면 전체를 일시적으로 밝힘 (노란색이 아닌 흰색 계열로 처리)
+	vec3 base_col = light_color.rgb * final_int;
+	vec3 lightning_col = vec3(lightning * 0.85 * 0.5);
+	
+	COLOR = vec4(base_col + lightning_col, clamp(final_int * 0.9 + lightning * 0.6, 0.0, 1.0));
 }
 """
 	mat.shader = shader
@@ -71,6 +88,9 @@ func update_state(p_scroll_z: float, p_lane_x: float, p_curve_x: PackedFloat32Ar
 		if mat:
 			# BillboardManager에 정의된 공통 강도 설정을 따름
 			mat.set_shader_parameter("intensity", BillboardManager.HL_INTENSITY_ROAD * p_headlight_range)
+			mat.set_shader_parameter("flicker",   BillboardManager.current_flicker)
+			mat.set_shader_parameter("lightning", BillboardManager.lightning_intensity)
+			mat.set_shader_parameter("scroll_z",  scroll_z)
 		
 	queue_redraw()
 

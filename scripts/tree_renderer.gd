@@ -27,17 +27,26 @@ var _curve_x : PackedFloat32Array = PackedFloat32Array()
 var hill_px  : float = 0.0
 var scavenging_sys: Node2D = null
 var seed_offset : int = 0  # 스테이지마다 다른 배치를 위한 시드 오프셋
-var _textures : Array[Texture2D] = []
+var _textures_tree : Array[Texture2D] = []
+var _textures_bush : Array[Texture2D] = []
 var billboard_mgr: Node # BillboardManager
 var _range_mult : float = 1.0
 var _light_pool : LightMaterialPool
 const POOL_SIZE := 400
 
 func _ready() -> void:
+	# _ready에서는 로딩하지 않음 (메인 메뉴 빠른 진입 목적)
+	pass
+
+func load_assets() -> void:
+	if not _textures_tree.is_empty(): return # 이미 로드됨
+	
 	for i in range(1, 8):
-		var t := load("res://Asset/Image/trees/tree_%02d.png" % i) as Texture2D
-		if t:
-			_textures.append(t)
+		var t := BillboardManager.load_with_normal("res://Asset/Image/trees/tree_%02d.png" % i)
+		if t: _textures_tree.append(t)
+	for i in range(1, 9):
+		var t := BillboardManager.load_with_normal("res://Asset/Image/trees/bush_%02d.png" % i)
+		if t: _textures_bush.append(t)
 	
 	_light_pool = LightMaterialPool.new(POOL_SIZE, _AMBIENT_NORMAL, _AMBIENT_DARK)
 
@@ -57,7 +66,7 @@ func update_state(sz: float, cx: float, p_curve_x: PackedFloat32Array = PackedFl
 	_update_billboards()
 
 func _update_billboards() -> void:
-	if _textures.is_empty() or billboard_mgr == null:
+	if _textures_tree.is_empty() or billboard_mgr == null:
 		return
 	if _light_pool:
 		_light_pool.reset()
@@ -89,8 +98,11 @@ func _update_billboards() -> void:
 				var margin   := float(side) * depth * TREE_MARGIN_FROM_ROAD
 				var tx: float = float(proj.road_cx) + float(side) * float(proj.road_hw) * edge_mult + xvar + margin
 
-				var th  := depth * TREE_BASE_H
-				var tex := _textures[_tex_idx(k, side, li)]
+				var is_bush := (hash_val % 100 < 35)
+				var base_h  := 160.0 if is_bush else TREE_BASE_H
+				var tex     := _textures_bush[hash_val % _textures_bush.size()] if is_bush else _textures_tree[hash_val % _textures_tree.size()]
+				
+				var th  := depth * base_h
 				var tw  := th * float(tex.get_width()) / float(tex.get_height())
 
 				if tx + tw * 0.5 < 0.0 or tx - tw * 0.5 > BillboardManager.SCREEN_W:
@@ -112,7 +124,15 @@ func _update_billboards() -> void:
 				var rect = Rect2(tx - tw * 0.5, float(proj.ground_y) - th, tw, th)
 				
 				var mat := _light_pool.get_material(float(proj.light_h)) if _light_pool else null
-				billboard_mgr.add_entry(depth, rect, tex, fade, mat, Color(c_r, c_g, c_b))
+				# 나무는 바람에 흔들리도록 sway=1.0 적용
+				# 각 나무마다 다른 위상을 가지도록 hash_val을 이용해 sway_offset 전달
+				var s_off := (float(hash_val % 628) / 100.0) 
+				billboard_mgr.add_entry(
+					depth, rect, tex, fade, mat, Color(c_r, c_g, c_b), 
+					false, float(proj.light_h), float(proj.ground_y),
+					false, 0.0, 1.0, s_off
+				)
 
 func _tex_idx(k: int, side: int, layer: int) -> int:
-	return absi(k * 2654435761 + side * 40503 + layer * 1234567) % _textures.size()
+	# 더이상 메인 루프에서 사용하지 않지만, 호환성을 위해 유지할 경우 _textures_tree를 사용하거나 삭제 가능
+	return absi(k * 2654435761 + side * 40503 + layer * 1234567) % _textures_tree.size()

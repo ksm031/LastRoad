@@ -41,7 +41,7 @@ var _wheel        : Sprite2D
 var _spd_pivot    : Node2D
 var _rpm_pivot    : Node2D
 var _fuel_pivot   : Node2D
-var _fuel_warning_light: ColorRect
+var _fuel_warning_light: Sprite2D
 var _hud_spd      : Label
 
 # ── 저연료 및 괴물 추격 시각 효과 ──────────────────────────────────
@@ -84,12 +84,17 @@ var _next_blink_time: float = 0.0
 var _gameover_overlay : ColorRect
 var _center_label     : Label
 
+# ── 자막 시스템 ───────────────────────────────────────────────
+var _subtitle_label : RichTextLabel
+var _subtitle_timer : float = 0.0
+
 # ── 점퍼 보닛 오버레이 ────────────────────────────────────────
 var _jumper_hood_overlay : Sprite2D
 var _escape_gauge_bg     : ColorRect
 var _escape_gauge_fill   : ColorRect
 const ESCAPE_GAUGE_W     := 300.0
 const ESCAPE_GAUGE_H     := 10.0
+var _wheel_shake_icon    : Sprite2D
 ## 진동 트리거 — 외부(game_world) 및 내부 모두 이 함수만 사용
 func trigger_shake(type: String) -> void:
 	var def: Dictionary = SHAKE_DEFS.get(type, {})
@@ -168,6 +173,8 @@ func _ready() -> void:
 	_build_stage_overlays()
 	_build_wiper_switch()
 	_build_loot_prompt()
+	_build_subtitles()
+	_build_charm_ui()
 	update_radio_for_stage(1, 600.0)  # 스테이지 1 기본 초기화
 	_setup_cursor()
 	set_process(true)
@@ -192,6 +199,13 @@ var _dash_focus_t   : float = 0.0   # 계기판 줌을 위한 보간 변수 (0~1
 var _is_dragging_dial : bool = false
 var loot_ui : Node = null           # 인벤토리 UI 참조 (game_world에서 주입)
 var shop_ui : Node = null           # 상점/경로선택 UI 참조 (game_world에서 주입)
+var charm_sys : Node = null         # 부적 시스템 참조
+
+var _charm_container: Control
+var _charm_icons: Array = []
+var _charm_swap_overlay: Control
+var _new_charm_id_to_swap: String = ""
+
 var _drag_start_x   : float = 0.0
 var _drag_start_step: int = 0
 const DASH_GAUGES_RECT := Rect2(90.0, 470.0, 420.0, 190.0)
@@ -355,8 +369,13 @@ func _process(delta: float) -> void:
 		_shakes[key] = maxf(_shakes[key] - delta, 0.0)
 		if _shakes[key] == 0.0:
 			_shakes.erase(key)
-
-		
+			
+	if _subtitle_timer > 0.0:
+		_subtitle_timer -= delta
+		if _subtitle_timer <= 0.0:
+			_subtitle_label.text = ""
+		elif _subtitle_timer < 0.5:
+			_subtitle_label.modulate.a = _subtitle_timer / 0.5
 	# 포커싱 (거울)
 	if _f_toggled:
 		_focus_t = minf(_focus_t + delta * 5.0, 1.0)
@@ -825,10 +844,12 @@ func _build_fuel_needle() -> void:
 	_fuel_pivot = _make_needle_pivot(FUEL_GAUGE_CENTER, "res://Asset/Image/speed meter needle.png", FUEL_NEEDLE_SCALE)
 	_fuel_pivot.rotation = deg_to_rad(FUEL_ANGLE_MAX)  # 시작: Full(오른쪽)
 	
-	_fuel_warning_light = ColorRect.new()
-	_fuel_warning_light.size = Vector2(8, 8)
-	_fuel_warning_light.color = Color(1.0, 0.1, 0.1, 1.0)
-	_fuel_warning_light.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_fuel_warning_light = Sprite2D.new()
+	var tex := load("res://Asset/Image/fuel_icon.png")
+	if tex:
+		_fuel_warning_light.texture = tex
+		_fuel_warning_light.scale = Vector2(0.5, 0.5) # 아이콘 크기 조절
+	_fuel_warning_light.modulate = Color(1.0, 0.1, 0.1, 1.0) # 기본 붉은색 틴트
 	_fuel_warning_light.visible = false
 	add_child(_fuel_warning_light)
 
@@ -862,18 +883,48 @@ func _build_wheel() -> void:
 	add_child(_wheel)
 
 func _build_labels() -> void:
+	var font_neo := load("res://Font/NeoDunggeunmoPro-Regular.ttf") as Font
+	
 	_hud_spd = Label.new()
+	if font_neo: _hud_spd.add_theme_font_override("font", font_neo)
 	_hud_spd.position = Vector2(28, 24)
 	_hud_spd.add_theme_font_size_override("font_size", 22)
 	_hud_spd.add_theme_color_override("font_color", Color(0.9, 0.9, 0.7))
 	add_child(_hud_spd)
 
 	var help := Label.new()
+	if font_neo: help.add_theme_font_override("font", font_neo)
 	help.position = Vector2(28, 54)
 	help.add_theme_font_size_override("font_size", 16)
 	help.add_theme_color_override("font_color", Color(0.6, 0.6, 0.6))
 	help.text = "W/S: 가속·감속   A/D: 좌우 이동   F: 뒤보기   Z: 와이퍼   V: 라디오 조작"
 	add_child(help)
+
+func _build_subtitles() -> void:
+	var font_neo := load("res://Font/NeoDunggeunmoPro-Regular.ttf") as Font
+	_subtitle_label = RichTextLabel.new()
+	_subtitle_label.bbcode_enabled = true
+	_subtitle_label.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_subtitle_label.position = Vector2(0, 560)
+	_subtitle_label.size = Vector2(1280, 80)
+	
+	if font_neo:
+		_subtitle_label.add_theme_font_override("normal_font", font_neo)
+		_subtitle_label.add_theme_font_override("bold_font", font_neo)
+		_subtitle_label.add_theme_font_override("italics_font", font_neo)
+		_subtitle_label.add_theme_font_override("bold_italics_font", font_neo)
+		
+	_subtitle_label.add_theme_font_size_override("normal_font_size", 28)
+	_subtitle_label.add_theme_font_size_override("bold_font_size", 28)
+	_subtitle_label.add_theme_color_override("font_outline_color", Color.BLACK)
+	_subtitle_label.add_theme_constant_override("outline_size", 6)
+	add_child(_subtitle_label)
+
+func show_subtitle(bbcode_text: String, duration: float = 3.0) -> void:
+	if _subtitle_label == null: return
+	_subtitle_label.text = "[center]" + bbcode_text + "[/center]"
+	_subtitle_label.modulate.a = 1.0
+	_subtitle_timer = duration
 
 
 ## 시각 효과 오버레이 생성 (저연료, 괴물 추격)
@@ -901,7 +952,9 @@ func _build_loot_prompt() -> void:
 	_loot_prompt.mouse_filter = Control.MOUSE_FILTER_IGNORE
 
 	# 텍스트
+	var font_neo := load("res://Font/NeoDunggeunmoPro-Regular.ttf") as Font
 	_loot_prompt_label = Label.new()
+	if font_neo: _loot_prompt_label.add_theme_font_override("font", font_neo)
 	_loot_prompt_label.text = "▼ 수색"
 	_loot_prompt_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	_loot_prompt_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
@@ -951,7 +1004,9 @@ func _build_stage_overlays() -> void:
 	add_child(_gameover_overlay)
 	
 	# 중앙 텍스트 라벨 (GAME OVER / STAGE CLEAR)
+	var font_neo := load("res://Font/NeoDunggeunmoPro-Regular.ttf") as Font
 	_center_label = Label.new()
+	if font_neo: _center_label.add_theme_font_override("font", font_neo)
 	_center_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	_center_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
 	_center_label.position = Vector2(0.0, 0.0)
@@ -1001,19 +1056,35 @@ func _build_jumper_overlay() -> void:
 
 	# 탈출 게이지 배경
 	_escape_gauge_bg = ColorRect.new()
-	_escape_gauge_bg.color = Color(0.1, 0.1, 0.1, 0.7)
+	_escape_gauge_bg.color = CrtTheme.BG_PANEL
 	_escape_gauge_bg.size = Vector2(ESCAPE_GAUGE_W, ESCAPE_GAUGE_H)
 	_escape_gauge_bg.position = Vector2(640.0 - ESCAPE_GAUGE_W * 0.5, 310.0)
 	_escape_gauge_bg.visible = false
+	
+	var bg_border := ReferenceRect.new()
+	bg_border.editor_only = false
+	bg_border.border_color = CrtTheme.AMBER_DIM
+	bg_border.border_width = 1.0
+	bg_border.size = _escape_gauge_bg.size
+	_escape_gauge_bg.add_child(bg_border)
+	
 	add_child(_escape_gauge_bg)
 
 	# 탈출 게이지 채우기
 	_escape_gauge_fill = ColorRect.new()
-	_escape_gauge_fill.color = Color(0.9, 0.7, 0.1, 0.9)
-	_escape_gauge_fill.size = Vector2(0.0, ESCAPE_GAUGE_H)
+	_escape_gauge_fill.color = CrtTheme.AMBER
 	_escape_gauge_fill.position = Vector2(640.0 - ESCAPE_GAUGE_W * 0.5, 310.0)
+	_escape_gauge_fill.size = Vector2(0, ESCAPE_GAUGE_H)
 	_escape_gauge_fill.visible = false
 	add_child(_escape_gauge_fill)
+
+	# 핸들 흔들기 안내 아이콘
+	_wheel_shake_icon = Sprite2D.new()
+	_wheel_shake_icon.texture = load("res://Asset/Image/wheel_icon.png")
+	_wheel_shake_icon.position = Vector2(640.0, 275.0) # 게이지 위쪽
+	_wheel_shake_icon.scale = Vector2(0.8, 0.8)
+	_wheel_shake_icon.visible = false
+	add_child(_wheel_shake_icon)
 
 var _jumper_target_sway : float = 0.0
 var _jumper_current_sway : float = 0.0
@@ -1053,6 +1124,9 @@ func set_jumper_on_hood(on: bool, drop_left: bool = false) -> void:
 		_escape_gauge_fill.visible = on
 	if not on and _escape_gauge_fill:
 		_escape_gauge_fill.size.x = 0.0
+	
+	if _wheel_shake_icon:
+		_wheel_shake_icon.visible = on
 
 
 
@@ -1086,6 +1160,18 @@ func set_gameover_fade(t: float) -> void:
 	if t >= 0.8 and _center_label.text == "":
 		_center_label.text = "GAME OVER\n\n괴물에게 따라잡혔다."
 		_center_label.add_theme_font_size_override("font_size", 48)
+
+func stop_wiper() -> void:
+	_wiper_state = 0
+	_wiper_time = 0.0
+
+## 스테이지 오버레이 (구간 정보)
+func show_stage_overlay(stage: int, dist_km: float) -> void:
+	_gameover_overlay.visible = true
+	_gameover_overlay.color = Color(0.0, 0.0, 0.0, 0.7)
+	_center_label.visible = true
+	_center_label.text = "STAGE %d\n\nDISTANCE %.1f km" % [stage, dist_km]
+	_center_label.add_theme_font_size_override("font_size", 42)
 
 ## 스테이지 클리어 표시
 func show_stage_clear(stage: int, is_final: bool) -> void:
@@ -1127,6 +1213,12 @@ func update(speed: float, scroll_z: float, steering_angle: float, rpm: float, mo
 	_update_visual_effects(monster_distance)
 	_update_clock(delta)
 	_update_safe_zone_schedule(stage_dist)
+	
+	# 핸들 흔들기 아이콘 애니메이션 (좌우로 회전)
+	if _wheel_shake_icon and _wheel_shake_icon.visible:
+		var rotate_t := Time.get_ticks_msec() * 0.008
+		_wheel_shake_icon.rotation = sin(rotate_t) * 0.75 # 더 큰 각도로 좌우 회전
+		_wheel_shake_icon.position.x = 640.0 # 위치 고정
 	
 	if _wheel != null:
 		_wheel.rotation = deg_to_rad(steering_angle)
@@ -1333,7 +1425,10 @@ func _update_shake(speed: float, scroll_z: float, steering_angle: float) -> void
 	if _fuel_pivot != null:
 		_fuel_pivot.position = FUEL_GAUGE_CENTER + offset
 	if _fuel_warning_light != null:
-		_fuel_warning_light.position = FUEL_GAUGE_CENTER + offset + Vector2(-15.0, 10.0) - _fuel_warning_light.size * 0.5
+		var icon_size = Vector2.ZERO
+		if _fuel_warning_light.texture:
+			icon_size = _fuel_warning_light.texture.get_size() * _fuel_warning_light.scale
+		_fuel_warning_light.position = FUEL_GAUGE_CENTER + offset + Vector2(-15.0, 10.0) - icon_size * 0.5
 	if _mirror_clip != null:
 		_mirror_clip.position = MIRROR_MIN
 
@@ -1364,3 +1459,134 @@ func _update_shake(speed: float, scroll_z: float, steering_angle: float) -> void
 		# (기존 300에서 250으로 낮춰서, 지평선이 거울 아래쪽에 위치하고 하늘/괴물의 상체가 더 많이 보이게 함)
 		var rv_center := Vector2(1280.0 * 0.5, 240.0)
 		_rearview_node.position = mirror_center - (rv_center * base_scale) + Vector2(mir_x, mir_y)
+
+# ── 참(Charm) 시스템 UI ──
+func _build_charm_ui() -> void:
+	# 장착된 부적 아이콘 컨테이너
+	_charm_container = Control.new()
+	var hbox = HBoxContainer.new()
+	# 화면 우상단으로 배치 (총 폭 290px 고려)
+	hbox.position = Vector2(970.0, 20.0)
+	hbox.add_theme_constant_override("separation", 10)
+	_charm_container.add_child(hbox)
+	add_child(_charm_container)
+	
+	for i in range(6):
+		var panel = Panel.new()
+		panel.custom_minimum_size = Vector2(40, 40)
+		var style = StyleBoxFlat.new()
+		style.bg_color = Color(0, 0, 0, 0.5)
+		style.border_width_left = 2; style.border_width_right = 2
+		style.border_width_top = 2; style.border_width_bottom = 2
+		style.border_color = Color(0.4, 0.4, 0.4)
+		panel.add_theme_stylebox_override("panel", style)
+		
+		var lbl = Label.new()
+		lbl.set_anchors_preset(Control.PRESET_FULL_RECT)
+		lbl.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+		lbl.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+		lbl.text = ""
+		panel.add_child(lbl)
+		
+		_charm_icons.append({"panel": panel, "label": lbl, "charm_id": ""})
+		hbox.add_child(panel)
+
+	# 7번째 부적 교체 UI 오버레이
+	_charm_swap_overlay = Control.new()
+	_charm_swap_overlay.set_anchors_preset(Control.PRESET_FULL_RECT)
+	_charm_swap_overlay.visible = false
+	add_child(_charm_swap_overlay)
+	
+	var dim = ColorRect.new()
+	dim.color = Color(0, 0, 0, 0.8)
+	dim.set_anchors_preset(Control.PRESET_FULL_RECT)
+	_charm_swap_overlay.add_child(dim)
+	
+	var title = Label.new()
+	title.text = "부적이 가득 찼습니다. 버릴 부적을 선택하거나, 새로 얻은 부적을 외면하세요."
+	title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	title.position = Vector2(0, 200)
+	title.size = Vector2(1280, 50)
+	title.add_theme_font_size_override("font_size", 24)
+	_charm_swap_overlay.add_child(title)
+	
+	var discard_new_btn = Button.new()
+	discard_new_btn.text = "새로운 부적 외면하기 (포기)"
+	discard_new_btn.position = Vector2(540, 500)
+	discard_new_btn.size = Vector2(200, 50)
+	discard_new_btn.pressed.connect(func():
+		_charm_swap_overlay.visible = false
+		_new_charm_id_to_swap = ""
+	)
+	_charm_swap_overlay.add_child(discard_new_btn)
+
+func init_charm_sys() -> void:
+	if charm_sys != null:
+		charm_sys.charms_updated.connect(_on_charms_updated)
+		charm_sys.charm_full.connect(_show_charm_swap_ui)
+		_on_charms_updated()
+
+func _on_charms_updated() -> void:
+	if charm_sys == null: return
+	var active = charm_sys.get_active_charms()
+	for i in range(6):
+		var dict = _charm_icons[i]
+		if i < active.size():
+			var cid = active[i]
+			var data = charm_sys.get_charm_data(cid)
+			dict["charm_id"] = cid
+			dict["label"].text = str(data.get("name", cid)).substr(0, 2)
+			dict["panel"].tooltip_text = data.get("name", "") + "\n" + data.get("desc", "")
+			var sb = dict["panel"].get_theme_stylebox("panel") as StyleBoxFlat
+			sb.border_color = Color(0.8, 0.6, 0.2)
+		else:
+			dict["charm_id"] = ""
+			dict["label"].text = ""
+			dict["panel"].tooltip_text = "빈 부적 슬롯"
+			var sb = dict["panel"].get_theme_stylebox("panel") as StyleBoxFlat
+			sb.border_color = Color(0.4, 0.4, 0.4)
+
+func _show_charm_swap_ui(new_charm_id: String) -> void:
+	_new_charm_id_to_swap = new_charm_id
+	_charm_swap_overlay.visible = true
+	
+	# 기존 버튼 초기화
+	for child in _charm_swap_overlay.get_children():
+		if child is VBoxContainer:
+			child.queue_free()
+			
+	var hbox = HBoxContainer.new()
+	hbox.position = Vector2(340, 300)
+	hbox.add_theme_constant_override("separation", 20)
+	_charm_swap_overlay.add_child(hbox)
+	
+	var active = charm_sys.get_active_charms()
+	for i in range(active.size()):
+		var cid = active[i]
+		var data = charm_sys.get_charm_data(cid)
+		
+		var vbox = VBoxContainer.new()
+		var btn = Button.new()
+		btn.custom_minimum_size = Vector2(80, 80)
+		btn.text = str(data.get("name", cid)).substr(0, 2)
+		btn.tooltip_text = data.get("name", "") + "\n" + data.get("desc", "")
+		var style = StyleBoxFlat.new()
+		style.bg_color = Color(0, 0, 0, 0.8)
+		style.border_width_left = 2; style.border_width_right = 2
+		style.border_width_top = 2; style.border_width_bottom = 2
+		style.border_color = Color(0.8, 0.6, 0.2)
+		btn.add_theme_stylebox_override("normal", style)
+		
+		var desc = Label.new()
+		desc.text = "버리기"
+		desc.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+		
+		btn.pressed.connect(func():
+			charm_sys.replace_charm(cid, _new_charm_id_to_swap)
+			_charm_swap_overlay.visible = false
+			_new_charm_id_to_swap = ""
+		)
+		
+		vbox.add_child(btn)
+		vbox.add_child(desc)
+		hbox.add_child(vbox)
