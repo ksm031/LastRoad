@@ -18,6 +18,8 @@ const SEARCH_TIME := 0.10   # 슬롯 1개당 수색 시간 (초)
 # ── 데이터 참조 ───────────────────────────────────────────
 var inv: InventoryManager
 var meta: MetaProgression
+var vehicle: LastRoadVehicle
+var charm_sys: CharmSystem
 var _wreck_seed: int = -1
 
 # ── 폐차 상태 ─────────────────────────────────────────────
@@ -57,6 +59,14 @@ var _sort_btn    : Button
 var _title_lbl   : Label
 var _is_trunk_only : bool = false
 
+# ── 내구도 UI 노드 ──────────────────────────────────────────
+var _durability_panel: Control
+var _drivetrain_rect: TextureRect
+var _lf_tire_rect: TextureRect
+var _rf_tire_rect: TextureRect
+var _lb_tire_rect: TextureRect
+var _rb_tire_rect: TextureRect
+
 # ─────────────────────────────────────────────────────────
 func _ready() -> void:
 	layer = 12
@@ -73,6 +83,7 @@ func open_trunk() -> void:
 	_held_item = ""
 	_search_done = true
 	_refresh_trunk_ui()
+	_refresh_durability_ui()
 	_root.visible = true
 
 # ── 외부에서 호출: 폐차 오픈 ─────────────────────────────
@@ -93,6 +104,7 @@ func open_wreck(wreck_seed: int) -> void:
 	_held_item    = ""
 	_rebuild_wreck_grid()
 	_refresh_trunk_ui()
+	_refresh_durability_ui()
 	_root.visible = true
 
 func close() -> void:
@@ -142,6 +154,23 @@ func _reveal_next_slot() -> void:
 	while _search_slot < total:
 		if not _revealed[_search_slot]:
 			_revealed[_search_slot] = true
+			
+			# ── 자석 고양이 부적: 빈 칸 수색 시 15% 확률로 기름 1L 획득 ──
+			var slot_item := str(_wreck_items.get(_search_slot, ""))
+			if slot_item == "" and charm_sys and charm_sys.has_charm("magnetic_cat"):
+				if randf() < 0.15:
+					if vehicle:
+						vehicle.fuel = minf(vehicle.fuel + 1.0, vehicle.fuel_max)
+						vehicle.fuel_ratio = vehicle.fuel / vehicle.fuel_max
+					# 심리적 피드백: 슬롯을 연두색으로 플래시
+					var slot_ctrl := _wreck_slots[_search_slot] as Control
+					var bg := slot_ctrl.get_node_or_null("BG") as ColorRect
+					if bg:
+						var orig_color := bg.color
+						bg.color = Color(0.15, 0.55, 0.25, 0.9)  # 연두색 플래시
+						var tw := create_tween()
+						tw.tween_property(bg, "color", orig_color, 0.6)
+			
 			_refresh_wreck_slot(_search_slot)
 			_search_slot += 1
 			_active_state["search_slot"] = _search_slot
@@ -205,6 +234,9 @@ func _build_ui() -> void:
 
 	# ── 버리기 존 (하단 중앙) ──
 	_build_discard_zone()
+
+	# ── 차량 내구도 패널 ──
+	_build_durability_panel()
 
 	# ── 아이템 정보 라벨 (하단, 비워둠) ──
 	_info_label = Label.new()
@@ -401,6 +433,59 @@ func _build_discard_zone() -> void:
 			_drop_to_discard()
 	)
 	_root.add_child(_discard_zone)
+
+# ── 내구도 패널 ────────────────────────────────────────────
+func _build_durability_panel() -> void:
+	_durability_panel = Control.new()
+	_durability_panel.position = Vector2(400, 120)
+	_durability_panel.size = Vector2(300, 480)
+	_root.add_child(_durability_panel)
+	
+	var lbl := Label.new()
+	lbl.text = "차량 내구도"
+	lbl.position = Vector2(100, -30)
+	CrtTheme.style_label(lbl, 16, CrtTheme.AMBER)
+	_durability_panel.add_child(lbl)
+	
+	# 구동계
+	_drivetrain_rect = TextureRect.new()
+	_drivetrain_rect.texture = load("res://Asset/Image/Drivetrain.png")
+	_drivetrain_rect.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
+	_drivetrain_rect.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
+	_drivetrain_rect.position = Vector2(50, 0)
+	_drivetrain_rect.size = Vector2(200, 480)
+	_durability_panel.add_child(_drivetrain_rect)
+
+	# 타이어들
+	_lf_tire_rect = _create_tire_rect("res://Asset/Image/LF_tire.png", Vector2(10, 40))
+	_rf_tire_rect = _create_tire_rect("res://Asset/Image/RF_tire.png", Vector2(230, 40))
+	_lb_tire_rect = _create_tire_rect("res://Asset/Image/LB_tire.png", Vector2(10, 360))
+	_rb_tire_rect = _create_tire_rect("res://Asset/Image/RB_tire.png", Vector2(230, 360))
+
+func _create_tire_rect(path: String, pos: Vector2) -> TextureRect:
+	var tr = TextureRect.new()
+	tr.texture = load(path)
+	tr.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
+	tr.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
+	tr.position = pos
+	tr.size = Vector2(60, 100)
+	_durability_panel.add_child(tr)
+	return tr
+
+func _refresh_durability_ui() -> void:
+	if not vehicle: return
+	_tint_durability(_drivetrain_rect, vehicle.dur_drivetrain)
+	_tint_durability(_lf_tire_rect, vehicle.dur_lf_tire)
+	_tint_durability(_rf_tire_rect, vehicle.dur_rf_tire)
+	_tint_durability(_lb_tire_rect, vehicle.dur_lb_tire)
+	_tint_durability(_rb_tire_rect, vehicle.dur_rb_tire)
+
+func _tint_durability(tr: TextureRect, val: float) -> void:
+	var ratio = clampf(val / 100.0, 0.0, 1.0)
+	var r = 1.0 if ratio <= 0.5 else 1.0 - (ratio - 0.5) * 2.0
+	var g = 1.0 if ratio >= 0.5 else ratio * 2.0
+	var b = 0.0
+	tr.modulate = Color(r, g, b, 1.0)
 
 # ─────────────────────────────────────────────────────────
 # 슬롯 노드 공통 생성

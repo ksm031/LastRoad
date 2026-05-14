@@ -33,7 +33,7 @@ const CHARM_DB := {
 	},
 	"adrenaline_syringe": {
 		"name": "아드레날린 주사기",
-		"desc": "장애물(포트홀/낙석) 충돌 시 속도가 줄지 않고, 3초간 20% 빨라진다.",
+		"desc": "와쳐 등 괴물(적) 충돌 시 속도 감소 무효 + 3초간 가속도 +20%",
 		"type": "speed"
 	},
 	"burnt_clutch": {
@@ -132,6 +132,11 @@ const CHARM_DB := {
 	"crash_test_dummy": {
 		"name": "단단한 더미 인형",
 		"desc": "스테이지당 1회 한정, 장애물 충돌로 인한 차체 내구도 감소를 무효화한다.",
+		"type": "survival"
+	},
+	"weathered_pebble": {
+		"name": "풍화된 조약돌",
+		"desc": "포트홀·낙석 충돌 시 타이어 내구도 손상이 50% 감소하고, 5초간 괴물 접근 속도가 30% 느려진다.",
 		"type": "survival"
 	}
 }
