@@ -48,28 +48,36 @@ func update_sprite_transform(z_value: float):
 
 ---
 
-### 아스팔트 타일 규격 및 배리에이션
+### 도로 strip 절차 렌더링
 
-타일은 **가장 가까운 위치(z=1.0) 기준**으로 한 장만 제작한다. 코드가 z값에 따라 세로 높이를 자동 축소한다. 가로는 도로 가시 영역 전체(1280px)를 덮는다.
+도로는 **별도 타일 이미지를 사용하지 않는다**. `road_renderer.gd`의 `_draw()`에서 화면 Y축을 **400개 strip**(`NUM_STRIPS = 400`)으로 분할해 매 프레임 직접 렌더한다. 각 strip은 `HORIZON_Y(300)`에서 `ROAD_BOTTOM_Y(500)`까지의 영역을 균등 분할한 가로 띠다.
 
-| 타일 | 규격 (원본) | 내용 |
-|------|-----------|------|
-| A — 기본 | 1280×16px | 단색 어두운 아스팔트 #2A2420 |
-| B — 반사 | 1280×16px | 약간 밝은 줄. 헤드라이트 원뿔 안쪽 구간 |
-| C — 균열 | 1280×16px | 불규칙 밝은 픽셀 1~2개. 낡은 노면 질감 |
-| D — 습기 | 1280×16px | 파란빛 섞인 회색. 비 오는 구간 |
-| E — 오일 | 1280×16px | 어두운 갈색 패치. 폐차·사고 지점 근처 |
+**Strip 산출 로직**
 
-z값에 따른 세로 축소 예시:
-
-```
-z=1.0 (화면 하단, 가장 가까움) → 높이 16px 원본 그대로
-z=0.7 (중간)                   → 높이 약 11px 로 축소
-z=0.4 (먼 거리)                → 높이 약 6px 로 축소
-z=0.1 (소실점 근처)            → 높이 2px 로 축소
+```gdscript
+# road_renderer.gd 개요
+for i in range(NUM_STRIPS):
+    var z = i / float(NUM_STRIPS)               # 0=지평선, 1=화면 하단
+    var y_top = HORIZON_Y + (ROAD_BOTTOM_Y - HORIZON_Y) * z
+    var y_bot = y_top + strip_height
+    var half_width = ROAD_HW_MAX * z            # 원근 — 멀수록 좁음
+    var color = stripe_color(z, stage_palette)  # 짝/홀 교번 + 구간별 톤
+    draw_rect(Rect2(640 - half_width, y_top, half_width * 2, y_bot - y_top), color)
 ```
 
-픽셀 뭉개짐 방지를 위해 텍스처 필터는 반드시 **Nearest Neighbor** 적용.
+### 도로 배리에이션 — 5종 컬러 셋
+
+별도 이미지 없이 strip 색상으로만 구간 분위기를 만든다. 코드는 구간별 팔레트를 strip 색상에 적용한다.
+
+| 배리에이션 | 적용 구간 | 색상 처리 |
+|-----------|---------|---------|
+| A — 기본 | 1, 2, 3 | `#2A2420` 기준. 짝수 strip 약간 밝게 (`COL_ROAD_A/B`) |
+| B — 반사 | 헤드라이트 콘 안쪽 | 기본 색에 `light_height` 가산 |
+| C — 균열 | 3, 4 | 시드 기반 strip 1~2개에 밝은 픽셀 점 추가 |
+| D — 습기 | 비 오는 구간 | 기본 색에 파란빛 8% 혼합 |
+| E — 오일 | 폐차·사고 지점 근처 | 기본 색에 갈색 패치 |
+
+픽셀 뭉개짐 방지를 위해 `texture_filter`는 전체 `Nearest Neighbor` 적용.
 
 ---
 
