@@ -86,14 +86,16 @@ void fragment() {
 	// 기존 높이 기반 조명
 	float y_up = 1.0 - uv.y;
 	float transition = 0.15;
-	float lit = smoothstep(light_height, light_height - transition, y_up);
+	// smoothstep 인자 순서를 오름차순으로 맞추어 모바일 렌더러의 undefined behavior(NaN 등) 방지
+	float lit = 1.0 - smoothstep(light_height - transition, light_height, y_up);
 	
 	// 노말맵 효과를 기존 조명(lit)에 결합 (기본 밝기 0.3 보장)
 	float normal_factor = 0.3 + 0.7 * diff;
 	float final_lit = lit * normal_factor;
 	
 	if (is_jumping) {
-		float jump_unlit = smoothstep(jump_t, jump_t - 0.1, y_up);
+		// smoothstep 인자 순서를 오름차순으로 맞추어 undefined behavior 방지
+		float jump_unlit = 1.0 - smoothstep(jump_t - 0.1, jump_t, y_up);
 		final_lit = min(final_lit, jump_unlit);
 	}
 	
@@ -107,6 +109,7 @@ void fragment() {
 	COLOR   = mix(dark, bright, final_lit);
 	COLOR.a = tex.a;
 }
+
 """
 
 static var _shared_headlight_shader: Shader = null
@@ -165,6 +168,14 @@ static func z_to_light_height(depth: float, range_mult: float = 1.0) -> float:
 	return t # 선형으로 변경하여 더 "점점" 밝아지는 느낌 복구
 
 ## 원근 투영에 필요한 모든 공통 값을 한 번에 계산
+## wz = k * spacing + wz_base + [0 .. wz_jitter] 스폰 공식에 맞는 k 슬롯 범위
+static func visible_k_range(scroll_z: float, spacing: float, dz_min: float, dz_max: float, wz_base: float, wz_jitter: float = 0.0) -> Vector2i:
+	if spacing <= 0.001:
+		return Vector2i(0, 0)
+	var k_min := int(floor((scroll_z + dz_min - wz_base) / spacing))
+	var k_max := int(ceil((scroll_z + dz_max - wz_base - wz_jitter) / spacing))
+	return Vector2i(k_min, k_max)
+
 static func calculate_projection(dz: float, cam_x: float, curve_x: PackedFloat32Array, hill_px: float, range_mult: float = 1.0) -> Dictionary:
 	# 화면을 벗어나기 전에 렌더링이 사라지는 현상(dz <= 0)을 방지하기 위해 하한을 0.015로 약간 올림
 	var depth := CAMERA_DEPTH / maxf(dz, 0.015)
@@ -228,11 +239,11 @@ static func add_impact_shake(amount: float) -> void:
 func clear_entries() -> void:
 	_entries.clear()
 
-func add_entry(depth: float, rect: Rect2, tex: Texture2D, fade: float = 1.0, mat: Material = null, color: Color = Color.WHITE, flip_h: bool = false, light_h: float = 0.0, ground_y: float = -1.0, is_jumping: bool = false, jump_t: float = 0.0, sway: float = 0.0, sway_offset: float = 0.0) -> void:
+func add_entry(depth: float, rect: Rect2, tex: Texture2D, fade: float = 1.0, mat: Material = null, color: Color = Color.WHITE, flip_h: bool = false, light_h: float = 0.0, ground_y: float = -1.0, is_jumping: bool = false, jump_t: float = 0.0, sway: float = 0.0, sway_offset: float = 0.0, is_shadowless: bool = false) -> void:
 	if tex == null: return
 
 	# 1. 실루엣 그림자 추가
-	if light_h > 0.1:
+	if light_h > 0.1 and not is_shadowless:
 		var gy = ground_y if ground_y > 0 else rect.end.y
 		var dz := CAMERA_DEPTH / maxf(depth, 0.001)
 		var dz_head := dz + 6.0 
@@ -325,7 +336,7 @@ func render_all() -> void:
 				spr.position = Vector2(e.rect.get_center().x, e.rect.end.y)
 				spr.scale = e.rect.size / e.tex.get_size()
 			else:
-				# 일반 오브젝트: 상단 좌측 앵커 (기존 방식)
+				# 일반 오브젝트: 원래의 견고한 상단 좌측 앵커 방식으로 안전하게 롤백
 				spr.centered = false
 				spr.offset = Vector2.ZERO
 				spr.position = e.rect.position

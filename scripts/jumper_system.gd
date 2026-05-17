@@ -9,8 +9,10 @@ const BillboardManager = preload("res://scripts/billboard_manager.gd")
 var SPACING_Z      := 65.0    # 실제값은 spawn_config.gd에서 주입
 var SPAWN_CHANCE   := 0.15
 var seed_offset    := 0       # 스테이지마다 다른 배치를 위한 시드 오프셋
-const VISIBLE_DZ_MIN := -1.0
+const VISIBLE_DZ_MIN := 0.40
 const VISIBLE_DZ_MAX := 85.0
+const WZ_BASE_OFFSET := 15.0   # _jumper_at_k: k*SPACING_Z + 15 + jitter
+const WZ_MAX_JITTER  := 15.0
 
 # ── 충돌 튜닝 ────────────────────────────────────────────────
 const HIT_DZ         := 0.45
@@ -74,7 +76,7 @@ func load_assets() -> void:
 	_light_pool = LightMaterialPool.new(POOL_SIZE, _AMBIENT_NORMAL, _AMBIENT_DARK)
 
 const _AMBIENT_NORMAL := Color(0.42, 0.42, 0.42, 1.0)
-const _AMBIENT_DARK   := Color(0.08, 0.08, 0.10, 1.0)
+const _AMBIENT_DARK   := Color(0.25, 0.25, 0.28, 1.0)
 
 func set_dark_mode(is_dark: bool) -> void:
 	if _light_pool:
@@ -189,10 +191,9 @@ func _update_billboards() -> void:
 		
 
 	var entries : Array = []
-	var k_min := int(floor((scroll_z + VISIBLE_DZ_MIN) / SPACING_Z))
-	var k_max := int(ceil((scroll_z + VISIBLE_DZ_MAX) / SPACING_Z))
+	var kr := BillboardManager.visible_k_range(scroll_z, SPACING_Z, VISIBLE_DZ_MIN, VISIBLE_DZ_MAX, WZ_BASE_OFFSET, WZ_MAX_JITTER)
 
-	for k in range(k_min, k_max + 1):
+	for k in range(kr.x, kr.y + 1):
 		var o := _jumper_at_k(k)
 		if o.is_empty():
 			continue
@@ -206,7 +207,7 @@ func _update_billboards() -> void:
 		if jump_done:
 			continue
 
-		if not is_jumping and (dz <= -1.0 or dz > VISIBLE_DZ_MAX):
+		if not is_jumping and (dz < VISIBLE_DZ_MIN or dz > VISIBLE_DZ_MAX):
 			continue
 
 		var render_dz := dz

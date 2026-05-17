@@ -6,8 +6,10 @@ const BillboardManager = preload("res://scripts/billboard_manager.gd")
 var SPACING_Z        := 18.0    # 실제값은 spawn_config.gd에서 주입
 var SPAWN_CHANCE     := 0.25
 var seed_offset      := 0     # 스테이지마다 다른 배치를 위한 시드 오프셋
-const VISIBLE_DZ_MIN   := -1.0
+const VISIBLE_DZ_MIN   := 0.35
 const VISIBLE_DZ_MAX   := 90.0
+const WZ_BASE_OFFSET   := 10.0   # _obstacle_at_k: k*SPACING_Z + 10 + jitter
+const WZ_MAX_JITTER    := 8.0
 
 # ── 충돌 튜닝 ────────────────────────────────────────────────
 const HIT_DZ           := 0.38
@@ -40,7 +42,7 @@ func load_assets() -> void:
 	_light_pool = LightMaterialPool.new(POOL_SIZE, _AMBIENT_NORMAL, _AMBIENT_DARK)
 
 const _AMBIENT_NORMAL := Color(0.55, 0.52, 0.48, 1.0)
-const _AMBIENT_DARK   := Color(0.12, 0.11, 0.10, 1.0) # 다시 어둡게 복구
+const _AMBIENT_DARK   := Color(0.28, 0.26, 0.24, 1.0) # 다크 루트에서도 바닥 장애물을 최소 식별 가능하도록 조절
 
 func set_dark_mode(is_dark: bool) -> void:
 	if _light_pool:
@@ -127,18 +129,17 @@ func _obstacle_at_k(k: int) -> Dictionary:
 func _update_billboards() -> void:
 	if _textures.is_empty() or billboard_mgr == null:
 		return
-	var k_min := int(floor((scroll_z + VISIBLE_DZ_MIN) / SPACING_Z))
-	var k_max := int(ceil((scroll_z + VISIBLE_DZ_MAX) / SPACING_Z))
+	var kr := BillboardManager.visible_k_range(scroll_z, SPACING_Z, VISIBLE_DZ_MIN, VISIBLE_DZ_MAX, WZ_BASE_OFFSET, WZ_MAX_JITTER)
 	if _light_pool:
 		_light_pool.reset()
 		
-	for k in range(k_min, k_max + 1):
+	for k in range(kr.x, kr.y + 1):
 		var o := _obstacle_at_k(k)
 		if o.is_empty():
 			continue
 		var wz := float(o["wz"])
 		var dz := wz - scroll_z
-		if dz <= -1.0 or dz > VISIBLE_DZ_MAX:
+		if dz < VISIBLE_DZ_MIN or dz > VISIBLE_DZ_MAX:
 			continue
 		var proj := BillboardManager.calculate_projection(dz, cam_x, _curve_x, hill_px, _headlight_range)
 		var depth: float = proj.depth

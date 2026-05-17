@@ -8,6 +8,7 @@ var trunk_size := 20
 # 트렁크: "" = 빈 슬롯
 var trunk: Array = []
 var money: int = 5000
+var vehicle: LastRoadVehicle
 
 # 폐차 상태 캐싱: wreck_seed -> { items: Dictionary, revealed: Array, search_slot: int, search_timer: float, search_done: bool }
 var wreck_states: Dictionary = {}
@@ -29,7 +30,7 @@ const ITEM_DB := {
 	"canned_food": {"name": "통조림",         "type": "junk",       "value": 2000,  "color": Color(0.78, 0.63, 0.31)},
 	"flashlight":  {"name": "손전등",         "type": "junk",       "value": 3000,  "color": Color(0.90, 0.90, 0.31)},
 	"first_aid":   {"name": "상비약세트",     "type": "junk",       "value": 5000,  "color": Color(0.87, 0.31, 0.31)},
-	"tool_set":    {"name": "공구세트",       "type": "junk",       "value": 7000,  "color": Color(0.59, 0.39, 0.31), "size": [2, 1]},
+	"tool_set":    {"name": "공구세트",       "type": "consumable", "value": 7000,  "color": Color(0.59, 0.39, 0.31), "size": [2, 1]},
 	"smartphone":  {"name": "스마트폰",       "type": "junk",       "value": 10000, "color": Color(0.47, 0.47, 0.78)},
 	"wallet":      {"name": "지갑",           "type": "junk",       "value": 10000, "color": Color(0.78, 0.71, 0.20)},
 	"gold_ring":   {"name": "금반지",         "type": "junk",       "value": 20000, "color": Color(0.94, 0.78, 0.00)},
@@ -72,27 +73,43 @@ func get_or_generate_wreck_state(wreck_seed: int, wreck_cols: int, wreck_rows: i
 	var rng := RandomNumberGenerator.new()
 	rng.seed = wreck_seed
 
-	# 각 아이템 독립 확률 판정
+	# ── 스마트 루팅 (상황 보정) ──
+	var fuel_mult := 1.0
+	var valuable_mult := 1.0
+	var part_mult := 1.0
+	
+	if vehicle != null:
+		if vehicle.fuel / maxf(vehicle.fuel_max, 1.0) < 0.3:
+			fuel_mult = 2.0
+		
+		# 내구도 체크: 하나라도 50 미만이면 파츠 확률 증가
+		if vehicle.dur_drivetrain < 50.0 or vehicle.dur_lf_tire < 50.0 or vehicle.dur_rf_tire < 50.0 or vehicle.dur_lb_tire < 50.0 or vehicle.dur_rb_tire < 50.0:
+			part_mult = 2.0
+			
+	if money < 3000:
+		valuable_mult = 2.5
+
+	# 각 아이템 독립 확률 판정 (보정치 적용)
 	var drop_table := [
-		["fuel_can",    0.25],
-		["patch_kit",   0.20],
+		["fuel_can",    minf(0.25 * fuel_mult, 0.9)],
+		["patch_kit",   minf(0.20 * part_mult, 0.8)],
 		["cigarette",   0.15],
 		["scrap",       0.60],
 		["aluminum",    0.45],
 		["copper_wire", 0.30],
-		["wiper_blade", 0.25],
-		["oil_filter",  0.22],
-		["spark_plug",  0.18],
-		["battery",     0.13],
-		["side_mirror", 0.09],
+		["wiper_blade", minf(0.25 * part_mult, 0.8)],
+		["oil_filter",  minf(0.22 * part_mult, 0.8)],
+		["spark_plug",  minf(0.18 * part_mult, 0.8)],
+		["battery",     minf(0.13 * part_mult, 0.8)],
+		["side_mirror", minf(0.09 * part_mult, 0.8)],
 		["canned_food", 0.22],
 		["flashlight",  0.18],
 		["first_aid",   0.12],
 		["tool_set",    0.08],
-		["smartphone",  0.04],
-		["wallet",      0.06],
-		["gold_ring",   0.02],
-		["mil_supply",  0.02],
+		["smartphone",  minf(0.04 * valuable_mult, 0.5)],
+		["wallet",      minf(0.06 * valuable_mult, 0.5)],
+		["gold_ring",   minf(0.02 * valuable_mult, 0.5)],
+		["mil_supply",  minf(0.02 * valuable_mult, 0.5)],
 	]
 
 	var dropped: Array = []

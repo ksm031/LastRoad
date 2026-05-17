@@ -5,8 +5,10 @@ const BillboardManager = preload("res://scripts/billboard_manager.gd")
 # ── 스폰 튜닝 ─────────
 var SPACING_Z      := 35.0
 var seed_offset    := 0
-const VISIBLE_DZ_MIN := -1.0
+const VISIBLE_DZ_MIN := 0.38
 const VISIBLE_DZ_MAX := 85.0
+const WZ_BASE_OFFSET := 20.0
+const WZ_MAX_JITTER  := 10.0
 
 # ── 충돌 튜닝 ─────────
 const HIT_DZ         := 0.45
@@ -55,22 +57,24 @@ func load_assets() -> void:
 	_light_pool = LightMaterialPool.new(POOL_SIZE, _AMBIENT_NORMAL, _AMBIENT_DARK)
 
 const _AMBIENT_NORMAL := Color(0.28, 0.25, 0.32, 1.0)
-const _AMBIENT_DARK   := Color(0.05, 0.04, 0.07, 1.0)
+const _AMBIENT_DARK   := Color(0.24, 0.22, 0.26, 1.0)
 
 func set_dark_mode(is_dark: bool) -> void:
 	if _light_pool:
 		_light_pool.set_dark_mode(is_dark)
 
 func prepare_spawn(course_length_z: float, sanity_ratio: float) -> void:
-	# [테스트용] 정신력 조건 및 50% 확률 체크를 임시로 무시하고 무조건 등장하도록 수정
-	# if sanity_ratio > 0.3:
-	# 	target_k = -1
-	# 	return
-	# 	
-	# var r := BillboardManager.get_rand01(seed_offset + 999)
-	# if r > 0.5:
-	# 	target_k = -1
-	# 	return
+	# GDD: 정신력이 40% 이하일 때만 환영(지원) 등장 가능
+	if sanity_ratio > 0.4:
+		target_k = -1
+		return
+		
+	# 정신력이 낮을수록 등장 확률 증가 (최대 70%)
+	var spawn_chance := lerpf(0.7, 0.2, (sanity_ratio - 0.0) / 0.4)
+	var r := BillboardManager.get_rand01(seed_offset + 999)
+	if r > spawn_chance:
+		target_k = -1
+		return
 		
 	var max_k = int(course_length_z / SPACING_Z) - 5
 	if max_k < 10:
@@ -128,12 +132,17 @@ func check_collision(vehicle: LastRoadVehicle) -> bool:
 		
 		_hit_info[k] = {
 			"until_z": wz + HIT_COOLDOWN_Z,
-			"hit_time": _anim_time
+			"hit_time": _anim_time,
+			"is_hallucination": bool(o["is_hallucination"]) # 충돌 정보에 환영 여부 저장
 		}
 		
 		hit = true
 		break
 	return hit
+
+func is_hit_hallucination(k: int) -> bool:
+	if not _hit_info.has(k): return false
+	return bool(_hit_info[k].get("is_hallucination", false))
 
 func _is_hit_active(k: int) -> bool:
 	if not _hit_info.has(k):
@@ -155,17 +164,18 @@ func _watcher_at_k(k: int) -> Dictionary:
 		
 	var lane := int(floor(BillboardManager.get_rand01(k * 13331 + 53, seed_offset) * 3.0)) - 1
 	var wz := float(k) * SPACING_Z + 20.0 + BillboardManager.get_rand01(k * 13331 + 101, seed_offset) * 10.0
-	return { "k": k, "lane": lane, "wz": wz }
+	
+	# 지원(Jiwon)은 현재 시스템상 무조건 환영으로 간주 (정신력 낮을 때만 나오므로)
+	return { "k": k, "lane": lane, "wz": wz, "is_hallucination": true }
 
 func _update_billboards() -> void:
 	if _texture == null or billboard_mgr == null:
 		return
 	
-	var k_min := int(floor((scroll_z + VISIBLE_DZ_MIN) / SPACING_Z))
-	var k_max := int(ceil((scroll_z + VISIBLE_DZ_MAX) / SPACING_Z))
+	var kr := BillboardManager.visible_k_range(scroll_z, SPACING_Z, VISIBLE_DZ_MIN, VISIBLE_DZ_MAX, WZ_BASE_OFFSET, WZ_MAX_JITTER)
 	
 	var entries: Array = []
-	for k in range(k_min, k_max + 1):
+	for k in range(kr.x, kr.y + 1):
 		var o := _watcher_at_k(k)
 		if o.is_empty():
 			continue
@@ -173,7 +183,7 @@ func _update_billboards() -> void:
 		var dz := wz - scroll_z
 		
 		var is_hit = _is_hit_active(k)
-		if not is_hit and (dz <= -1.0 or dz > VISIBLE_DZ_MAX):
+		if not is_hit and (dz < VISIBLE_DZ_MIN or dz > VISIBLE_DZ_MAX):
 			continue
 			
 		var render_dz = maxf(dz, 0.15)
@@ -209,13 +219,18 @@ func _update_billboards() -> void:
 		var fade: float = 1.0 - clampf((dz - VISIBLE_DZ_MAX * 0.75) / (VISIBLE_DZ_MAX * 0.25), 0.0, 1.0)
 		var light_h: float = proj.light_h
 
+		# 지원은 무조건 환영이므로 투명도 0.6 적용
+		var color := Color.WHITE
+		color.a = 0.6
+
 		entries.append({
 			"depth": depth,
 			"rect": Rect2(x - w * 0.5, float(proj.ground_y) + hit_y_offset - h * 0.78, w, h),
 			"fade": fade,
 			"light_h": light_h,
 			"ground_y": float(proj.ground_y),
-			"tex": tex_to_use
+			"tex": tex_to_use,
+			"color": color
 		})
 
 	if _light_pool:
@@ -224,5 +239,6 @@ func _update_billboards() -> void:
 	for i in range(entries.size()):
 		var e = entries[i]
 		var mat := _light_pool.get_material(e.light_h) if _light_pool else null
-		billboard_mgr.add_entry(e.depth, e.rect, e.tex, e.fade, mat, Color.WHITE, false, float(e.light_h), float(e.ground_y))
+		billboard_mgr.add_entry(e.depth, e.rect, e.tex, e.fade, mat, e.color, false, float(e.light_h), float(e.ground_y))
+
 

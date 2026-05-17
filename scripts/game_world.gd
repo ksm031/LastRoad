@@ -1,5 +1,7 @@
 extends Node2D
 
+const _BloodOrbScript = preload("res://scripts/blood_orb_system.gd")
+
 # 화면/도로 공통 상수는 BillboardManager에 정의됨
 
 # ── 노드 참조 ────────────────────────────────────────────────
@@ -13,6 +15,7 @@ var _hud     : CanvasLayer
 var _rain_layer : CanvasLayer
 var _rain    : Node2D
 var _obstacles: LastRoadObstacles
+var _blood_orbs: Node2D
 var _scavenging: LastRoadScavenging
 var _watchers : LastRoadWatchers
 var _jiwons   : LastRoadJiwon
@@ -55,6 +58,7 @@ var _menu_layer : CanvasLayer
 var _menu_container : Control
 
 # ── 메타 진행 / 강화 ──
+var _pp_mat : ShaderMaterial
 var _meta : MetaProgression
 var _upgrades : VehicleUpgradeSystem
 var _skill_tree_ui : Node  # SkillTreeUI
@@ -110,9 +114,11 @@ const _MetaScript    = preload("res://scripts/meta_progression.gd")
 const _BillboardMgrScript = preload("res://scripts/billboard_manager.gd")
 const _SkillTreeScript = preload("res://scripts/skill_tree_ui.gd")
 const _CharmSystemScript = preload("res://scripts/charm_system.gd")
+const _HallucinationScript = preload("res://scripts/hallucination_video.gd")
 
 var _shop_ui: Node
 var _charm_sys: Node
+var _hallucination: HallucinationVideo
 var _mtn_base_y    : float = 0.0
 var _sky_base_y    : float = 0.0
 var _forest_base_y : float = 0.0
@@ -122,11 +128,7 @@ var _forest_y      : float = 0.0
 
 var _debug_stop_monster: bool = false
 
-func _input(event: InputEvent) -> void:
-	if event is InputEventKey and event.pressed and not event.echo:
-		if event.keycode == KEY_P:
-			_debug_stop_monster = not _debug_stop_monster
-			print("[DEBUG] 괴물 추격 정지 상태: ", _debug_stop_monster)
+
 
 # ─────────────────────────────────────────────────────────────
 func _ready() -> void:
@@ -173,6 +175,10 @@ func _ready() -> void:
 	_obstacles.billboard_mgr = _billboard_mgr
 	add_child(_obstacles)
 
+	_blood_orbs = _BloodOrbScript.new()
+	_blood_orbs.billboard_mgr = _billboard_mgr
+	add_child(_blood_orbs)
+
 	_vehicle = _VehicleScript.new(); add_child(_vehicle)
 	_vehicle.fuel_depleted.connect(func(): _hud.on_fuel_depleted())
 	# rain은 화면 고정이어야 하므로 CanvasLayer에 올려 카메라 줌/패럴랙스 영향 차단
@@ -194,6 +200,7 @@ func _ready() -> void:
 	
 	_inv_mgr = _InvMgrScript.new()
 	_inv_mgr.apply_meta(_meta)
+	_inv_mgr.vehicle = _vehicle
 	add_child(_inv_mgr)
 	
 	_loot_ui = _LootUIScript.new()
@@ -232,6 +239,10 @@ func _ready() -> void:
 	add_child(_shop_ui)
 	_hud.shop_ui = _shop_ui
 
+	# ── 환각 영상 시스템 ──
+	_hallucination = _HallucinationScript.new()
+	add_child(_hallucination)
+
 	_camera = Camera2D.new()
 	_camera.position = Vector2(640.0, 360.0)
 	add_child(_camera)
@@ -242,14 +253,28 @@ func _ready() -> void:
 	var pp_layer := CanvasLayer.new()
 	pp_layer.layer = 15 # HUD(10)보다 높고 메인메뉴(20)보다 낮은 위치
 	add_child(pp_layer)
+	var pp_backbuffer := BackBufferCopy.new()
+	pp_backbuffer.copy_mode = BackBufferCopy.COPY_MODE_VIEWPORT
+	pp_layer.add_child(pp_backbuffer)
+
 	var pp_rect := ColorRect.new()
 	pp_rect.set_anchors_preset(Control.PRESET_FULL_RECT)
 	pp_rect.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	var pp_mat := ShaderMaterial.new()
-	pp_mat.shader = load("res://scripts/chromatic_aberration.gdshader")
-	pp_mat.set_shader_parameter("offset", 1.2) # 적절히 미세한 효과
-	pp_rect.material = pp_mat
+	pp_rect.color = Color(1.0, 1.0, 1.0, 1.0)
+	_pp_mat = ShaderMaterial.new()
+	_pp_mat.shader = load("res://scripts/chromatic_aberration.gdshader")
+	_pp_mat.set_shader_parameter("offset", 0.0) # 기본 정신력 100% 땐 0.0으로 완전 깨끗하게 시작!
+	pp_rect.material = _pp_mat
 	pp_layer.add_child(pp_rect)
+
+
+	# ── 블룸(Glow) 효과 (비활성화) ──────────────────────────────────────
+	# WorldEnvironment + BG_CANVAS + glow는 Mobile 렌더러와 호환성 문제가 있다.
+	# headlight 셰이더가 intensity 1.3 × flicker(최대 2.0)로 픽셀 밝기를 1.0 위로
+	# 끌어올리면 glow_hdr_threshold(0.8)를 초과한 픽셀이 글로우 버퍼로만 흡수되고
+	# 최종 캔버스 합성에서 누락되는 현상이 보고됨 (스테이지 3+에서 헤드라이트로
+	# 밝게 비춰진 적/장애물이 시야 안에서 사라지지만 충돌은 정상 동작).
+	# 블룸이 필요하면 CanvasLayer 위에 후처리 셰이더로 별도 구현할 것.
 
 	# 스테이지 1 초기 배치도 매 플레이마다 다르게 (로딩 시점에 처리하도록 제거)
 	# _apply_route_modifiers("normal")
@@ -423,6 +448,7 @@ func _process(delta: float) -> void:
 		_game_state = "game_over"
 		_state_timer = 0.0
 		_hud.show_gameover()
+		if _hallucination: _hallucination.force_stop()
 		return
 	
 	# ── 스테이지 클리어 체크 ──
@@ -466,9 +492,27 @@ func _process(delta: float) -> void:
 	
 	_sanity_ratio = clampf(_sanity_ratio, 0.0, 1.0)
 	
+	# ── 환각 영상 업데이트 (정신력 0일 때 주기적 재생) ──
+	if _hallucination:
+		_hallucination.update_sanity(_sanity_ratio, delta)
+	
 	_update_backdrops(delta)
 	_update_backdrops_vertical(delta, hill_px)
-	_hud.update(_vehicle.speed, _vehicle.scroll_z, _vehicle.steering_angle, _vehicle.rpm, _monster_distance, delta, _vehicle.fuel_ratio, _sanity_ratio, current_stage, stage_distance, STAGE_LENGTH)
+	
+	var min_tire := minf(minf(_vehicle.dur_lf_tire, _vehicle.dur_rf_tire), minf(_vehicle.dur_lb_tire, _vehicle.dur_rb_tire))
+	# ── 정신력 기반 HUD 노이즈 (계기판 떨림) ──
+	var hud_rpm := _vehicle.rpm
+	var hud_spd := _vehicle.speed
+	if _sanity_ratio < 0.3:
+		# 정신력 30% 이하부터 바늘이 무작위로 튐
+		var twitch_mag := (0.3 - _sanity_ratio) * 150.0
+		if randf() < 0.08:
+			hud_rpm += randf_range(-twitch_mag, twitch_mag) * 5.0
+			hud_spd += randf_range(-twitch_mag, twitch_mag) * 0.2
+			
+	var curr_bo: int = _blood_orbs.run_total_bo if _blood_orbs != null else 0
+	var curr_money: int = _inv_mgr.money if _inv_mgr != null else 0
+	_hud.update(hud_spd, _vehicle.scroll_z, _vehicle.steering_angle, hud_rpm, _monster_distance, delta, _vehicle.fuel_ratio, _sanity_ratio, current_stage, stage_distance, STAGE_LENGTH, _vehicle.dur_drivetrain, min_tire, curr_bo, curr_money)
 	_rain.vehicle_speed = _vehicle.speed
 	
 	# 카메라 줌 업데이트 (전체 화면 줌)
@@ -516,45 +560,91 @@ func _process(delta: float) -> void:
 		if _meta.has_perk("unyielding"):
 			dist_strength_p *= 0.70
 
+	if _pp_mat != null:
+		var max_dist_offset := 12.0
+		var cur_offset := dist_strength_p * max_dist_offset
+		_pp_mat.set_shader_parameter("offset", cur_offset)
+		_pp_mat.set_shader_parameter("time_phase", Time.get_ticks_msec() * 0.001)
+
 	_road.update_state(_vehicle.scroll_z, _vehicle.cam_x, curve_x, hill_px, _vehicle.headlight_range)
 	_billboard_mgr.update_state(_vehicle.scroll_z, _vehicle.cam_x, curve_x, hill_px, _vehicle.headlight_range)
 	
 	_scavenging.update_state(_vehicle.scroll_z, _vehicle.cam_x, curve_x, hill_px, _vehicle.headlight_range)
 	_trees.update_state(_vehicle.scroll_z, _vehicle.cam_x, curve_x, hill_px, _vehicle.headlight_range)
 	_obstacles.update_state(_vehicle.scroll_z, _vehicle.cam_x, curve_x, hill_px, _vehicle.headlight_range)
-	_watchers.update_state(_vehicle.scroll_z, _vehicle.cam_x, curve_x, hill_px, _vehicle.headlight_range)
+	_watchers._current_sanity_ratio = _sanity_ratio
+	_watchers.update_state(_vehicle.scroll_z, _vehicle.cam_x, curve_x, hill_px, _vehicle.headlight_range, _sanity_ratio)
 	_jiwons.update_state(_vehicle.scroll_z, _vehicle.cam_x, curve_x, hill_px, _vehicle.headlight_range)
 	_jumpers.update_state(_vehicle.scroll_z, _vehicle.cam_x, curve_x, hill_px, _vehicle.headlight_range)
+	_blood_orbs.update_state(_vehicle.scroll_z, _vehicle.cam_x, curve_x, hill_px, _vehicle.headlight_range, delta)
 	
 	_billboard_mgr.render_all()
+
+	var bo_pickup: int = _blood_orbs.check_collection(_vehicle)
+	if bo_pickup > 0:
+		print("[BO] +%d (total %d)" % [bo_pickup, _blood_orbs.run_total_bo])
 
 	if _obstacles.check_collision(_vehicle):
 		BillboardManager.add_impact_shake(0.6)
 		if _charm_sys.has_charm("weathered_pebble"):
 			_weathered_pebble_timer = 5.0
+		# GDD §4.5: 포트홀/낙석 — 현재 차선 기준 전륜 -5%, 구동계 -1.5%
+		var obs_contact := _get_contact_side()
+		_vehicle.apply_part_damage(obs_contact, 5.0, 1.5)
 		_hud.on_rock_hit()
 	if _watchers.check_collision(_vehicle):
-		# 와쳐: 속도 살짝 감소 + 정신력 감소 (GDD: 충돌 효과 + 정신력 -5~-20)
-		if _charm_sys.has_charm("adrenaline_syringe"):
-			_vehicle.apply_adrenaline_boost()
+		var is_hal := false
+		# 히트된 모든 인덱스 중 하나라도 환영이 있는지 체크
+		for k in _watchers._hit_info.keys():
+			if _watchers.is_hit_hallucination(k):
+				is_hal = true
+				break
+		
+		if is_hal:
+			# 환영 충돌: 글리치 효과 + 정신력 큰 감소 (-8%), 물리 피해 없음
+			if _hallucination: _hallucination.trigger_glitch(0.25)
+			_sanity_ratio -= 0.08
+			_hud.play_sfx("warning") # 환영은 기분 나쁜 소리
 		else:
-			_vehicle.apply_watcher_hit()
-		_sanity_ratio -= 0.10  # 정신력 10% 감소
+			# 실체 충돌: 기존 로직
+			var wat_contact := _get_contact_side()
+			_vehicle.apply_part_damage(wat_contact, 3.0, 1.0)
+			if _charm_sys.has_charm("adrenaline_syringe"):
+				_vehicle.apply_adrenaline_boost()
+			else:
+				_vehicle.apply_watcher_hit()
+			_sanity_ratio -= 0.03  # GDD: 와쳐 정신력 -3
+			_hud.on_watcher_hit()
+		
 		_sanity_ratio = clampf(_sanity_ratio, 0.0, 1.0)
-		_hud.on_watcher_hit()
 	if _jiwons.check_collision(_vehicle):
-		# jiwon: 와쳐와 동일한 기능
-		if _charm_sys.has_charm("adrenaline_syringe"):
-			_vehicle.apply_adrenaline_boost()
+		var is_hal := false
+		for k in _jiwons._hit_info.keys():
+			if _jiwons.is_hit_hallucination(k):
+				is_hal = true
+				break
+				
+		if is_hal:
+			if _hallucination: _hallucination.trigger_glitch(0.35) # 지원은 더 강한 글리치
+			_sanity_ratio -= 0.12 # 지원 환영은 더 큰 충격
+			_hud.play_sfx("warning")
 		else:
-			_vehicle.apply_watcher_hit()
-		_sanity_ratio -= 0.10
+			# jiwon: 와쳐와 동일
+			var jiw_contact := _get_contact_side()
+			_vehicle.apply_part_damage(jiw_contact, 3.0, 1.0)
+			if _charm_sys.has_charm("adrenaline_syringe"):
+				_vehicle.apply_adrenaline_boost()
+			else:
+				_vehicle.apply_watcher_hit()
+			_sanity_ratio -= 0.03
+			_hud.on_watcher_hit()
+			
 		_sanity_ratio = clampf(_sanity_ratio, 0.0, 1.0)
-		_hud.on_watcher_hit()
 	if _jumpers.check_collision(_vehicle):
 		BillboardManager.add_impact_shake(0.3)
 		if _jumper_on_hood:
 			# 이미 탑승 중 → 보닛 점퍼 깔리는 연출 + 덜컹 효과
+			# GDD: 점퍼 충돌은 부품 손상 없음 (정신력 -1/초 비용으로 대체)
 			_jumper_on_hood = false
 			_jumper_escape_gauge = 0.0
 			_hud.crush_jumper_on_hood()
@@ -562,6 +652,18 @@ func _process(delta: float) -> void:
 			_sanity_ratio -= 0.08
 			_sanity_ratio = clampf(_sanity_ratio, 0.0, 1.0)
 		# 탑승 중이 아닐 때는 점프 애니메이션 진행 후 jumper_boarded 신호로 처리
+
+	# ── 대각선 펑크 → 정신력 지속 감소 (GDD §4.1: 대각선 조합) ──
+	var _flat_lf := _vehicle.dur_lf_tire <= 0.0
+	var _flat_rf := _vehicle.dur_rf_tire <= 0.0
+	var _flat_lb := _vehicle.dur_lb_tire <= 0.0
+	var _flat_rb := _vehicle.dur_rb_tire <= 0.0
+	var _is_diagonal_flat := (_flat_lf and _flat_rb) or (_flat_rf and _flat_lb)
+	if _is_diagonal_flat:
+		_sanity_ratio -= 0.005 * delta  # GDD §4.1: 대각선 펑크 -0.5/초
+		_sanity_ratio = clampf(_sanity_ratio, 0.0, 1.0)
+
+
 
 	# ── 보닛 위 점퍼 처리 ──
 	if _jumper_on_hood:
@@ -592,13 +694,22 @@ func _process(delta: float) -> void:
 
 	# ── 부적 시너지 (지속 효과) ──
 	if _charm_sys.has_charm("nodding_dog"):
-		if _vehicle.speed >= _vehicle.MAX_SPEED * 0.9:
+		if _vehicle.speed >= _vehicle.max_speed * 0.9:
 			_sanity_ratio += 0.01 * delta
 			_sanity_ratio = clampf(_sanity_ratio, 0.0, 1.0)
+
 
 	# ── 수색 프롬프트: 정지 + 폐차 인접 시 표시 ──
 	_update_loot_prompt()
 
+func _get_contact_side() -> String:
+	# 차량의 cam_x 위치를 기준으로 충돌 부위를 판별
+	# cam_x는 -1.0 (좌측) ~ 1.0 (우측) 범위
+	if _vehicle.cam_x < -0.2:
+		return "left"
+	elif _vehicle.cam_x > 0.2:
+		return "right"
+	return "front"
 
 const LOOT_PROXIMITY_DZ := 5.0  # 폐차 인접 판정 거리
 
@@ -641,6 +752,7 @@ func _advance_to_next_stage() -> void:
 
 	_game_state = "stage_exit"
 	_state_timer = 0.0
+	if _hallucination: _hallucination.force_stop()
 	_vehicle.speed = 0.0
 	_exit_car_dz = 2.0
 	_exit_cam_tilt = 0.0
@@ -795,6 +907,7 @@ func _on_shop_depart_requested(route_type: String) -> void:
 	# 카메라 틸트 초기화 — 배경 수직 위치를 즉시 기본값으로 맞춤
 	_update_backdrops_vertical(1.0, 0.0, true)
 
+	_blood_orbs.clear_stage()
 	_game_state = "playing"
 	_hud.update_radio_for_stage(current_stage, STAGE_LENGTH)
 	print("[GAME] 출발! 스테이지: ", current_stage, " 루트: ", route_type)
@@ -806,7 +919,11 @@ func _apply_route_modifiers(route_type: String) -> void:
 	_watchers.seed_offset   = stage_seed + 11111
 	_jumpers.seed_offset    = stage_seed + 22222
 	_obstacles.seed_offset  = stage_seed + 33333
+	_blood_orbs.seed_offset = stage_seed + 66666
 	_trees.seed_offset      = stage_seed + 44444
+	var bo_scale := 1.0 + (current_stage - 1) * 0.12
+	_blood_orbs.SPACING_Z = 32.0 / bo_scale
+	_blood_orbs.SPAWN_CHANCE = clampf(0.38 + float(current_stage) * 0.06, 0.38, 0.72)
 	_jiwons.seed_offset     = stage_seed + 55555
 
 	# 스폰 파라미터 — spawn_config.gd 에서 일괄 계산
@@ -859,6 +976,7 @@ func _apply_route_modifiers(route_type: String) -> void:
 	_jiwons.set_dark_mode(is_dark or is_raining)
 	_jumpers.set_dark_mode(is_dark or is_raining)
 	_obstacles.set_dark_mode(is_dark or is_raining)
+	_blood_orbs.set_dark_mode(is_dark or is_raining)
 
 # ── 아이템 사용 ─────────────────────────────────────────────
 func _on_item_used(item_id: String) -> void:
@@ -866,11 +984,22 @@ func _on_item_used(item_id: String) -> void:
 		_vehicle.fuel = minf(_vehicle.fuel + 10.0, _vehicle.fuel_max)
 		_vehicle.fuel_ratio = _vehicle.fuel / _vehicle.fuel_max
 	elif item_id == "cigarette":
-		# 담배: 정신력 20% 회복 (임시값)
+		# 담배: 정신력 20% 회복
 		_sanity_ratio = minf(_sanity_ratio + 0.20, 1.0)
+		_hud.spawn_smoke()
 	elif item_id == "patch_kit":
-		# 아직 타이어 내구도 시스템이 없지만 향후를 위한 틀
-		pass
+		# 타이어 수리: 가장 상태가 나쁜 타이어 50% 수복
+		_vehicle.repair_worst_tire(50.0)
+		_hud.show_message("타이어를 수리했습니다.")
+		_hud.play_sfx("repair")
+	elif item_id == "tool_set":
+		# 구동계 수리: 40% 수복
+		_vehicle.repair_drivetrain(40.0)
+		_hud.show_message("구동계를 정비했습니다.")
+		_hud.play_sfx("repair")
+	
+	if _loot_ui != null:
+		_loot_ui.refresh_durability_ui()
 
 # ── 코너일 때만 하늘·산·숲 가로 패럴랙스 (무한 타일) ────────────
 func _update_backdrops(delta: float) -> void:
@@ -916,9 +1045,31 @@ func _update_backdrops_vertical(delta: float, hill_px: float, instant: bool = fa
 	if _forest_sprite != null: _forest_sprite.position.y = _forest_y
 
 func _unhandled_input(event: InputEvent) -> void:
-	if event is InputEventKey and event.pressed and event.keycode == KEY_0:
-		if _game_state == "playing":
-			_advance_to_next_stage()
+	if event is InputEventKey and event.pressed and not event.echo:
+		match event.keycode:
+			KEY_KP_0:
+				if _game_state == "playing":
+					_advance_to_next_stage()
+			KEY_KP_1:
+				_debug_stop_monster = not _debug_stop_monster
+				print("[DEBUG] 괴물 추격 정지 상태: ", _debug_stop_monster)
+			KEY_KP_2:
+				if _inv_mgr != null:
+					_inv_mgr.money += 10000
+					print("[DEBUG] 디버그 치트: 자금 +₩10,000원 추가 (현재: ₩", _inv_mgr.money, ")")
+					if _shop_ui != null and _shop_ui.visible:
+						_shop_ui._refresh_money()
+			KEY_KP_3:
+				if _vehicle != null:
+					_vehicle.fuel = clampf(_vehicle.fuel + 10.0, 0.0, _vehicle.fuel_max)
+					_vehicle.fuel_ratio = _vehicle.fuel / _vehicle.fuel_max
+					print("[DEBUG] 디버그 치트: 연료 +10L 충전 (현재: ", _vehicle.fuel, "/", _vehicle.fuel_max, "L)")
+			KEY_KP_ADD:
+				_sanity_ratio = clampf(_sanity_ratio + 0.10, 0.0, 1.0)
+				print("[DEBUG] 디버그 치트: 정신력 +10% 증가 (현재: ", int(_sanity_ratio * 100.0), "%)")
+			KEY_KP_SUBTRACT:
+				_sanity_ratio = clampf(_sanity_ratio - 0.10, 0.0, 1.0)
+				print("[DEBUG] 디버그 치트: 정신력 -10% 감소 (현재: ", int(_sanity_ratio * 100.0), "%)")
 
 # ── 메인 메뉴 ────────────────────────────────────────────────────
 func _build_main_menu() -> void:
@@ -1036,6 +1187,7 @@ func _reset_game() -> void:
 	_jumper_escape_gauge = 0.0
 	_active_wreck_seed = -1
 	_debug_stop_monster = false
+	_blood_orbs.reset_run()
 
 	# UI 초기화
 	_hud.visible = true
@@ -1118,6 +1270,7 @@ func _load_all_assets() -> void:
 		func(): if _jiwons.has_method("load_assets"): _jiwons.load_assets(),
 		func(): if _jumpers.has_method("load_assets"): _jumpers.load_assets(),
 		func(): if _scavenging.has_method("load_assets"): _scavenging.load_assets(),
+		func(): if _blood_orbs.has_method("load_assets"): _blood_orbs.load_assets(),
 		func(): _build_sky_tiled(),
 		func(): _build_mountain_tiled(),
 		func(): _build_forest_tiled()

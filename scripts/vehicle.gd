@@ -278,6 +278,10 @@ func handle_input(delta: float) -> void:
 
 	if _accel_lock > 0.0:
 		w = false
+	
+	# 구동계 간헐 정지 체크 (GDD §4.2: 30초마다 0.5초 가속 무효)
+	if update_drivetrain_stall(delta):
+		w = false
 		
 	if _adrenaline_timer > 0.0:
 		_adrenaline_timer -= delta
@@ -314,17 +318,24 @@ func handle_input(delta: float) -> void:
 	var effective_max := max_speed
 	var effective_accel := accel
 	
-	if flat_count > 0:
-		var tire_mult = maxf(1.0 - (flat_count * 0.15), 0.25)
-		effective_max *= tire_mult
-		effective_accel *= tire_mult
+	# GDD §4.1: 타이어 펑크 정확한 패널티
+	if flat_count == 1:
+		effective_max  *= 0.75   # 최고속도 -25%
+		effective_accel *= 0.70  # 가속력 -30%
+	elif flat_count == 2:
+		effective_max  *= 0.50   # 최고속도 -50%
+		effective_accel *= 0.45  # 가속력 -55%
+	elif flat_count >= 3:
+		effective_max  = minf(effective_max, 20.0)  # 20km/h 고정
+		effective_accel *= 0.20  # 가속력 -80%
 		
 	if _adrenaline_timer > 0.0:
 		effective_accel *= 1.20
 		
 	if dur_drivetrain <= 0.0:
-		effective_max = minf(effective_max, 30.0)
-		effective_accel *= 0.5
+		# GDD §4.2: 최고속도 30km/h 강제 제한, 가속 -75%
+		effective_max   = minf(effective_max, 30.0)
+		effective_accel *= 0.25
 		
 	var can_accel := (fuel > 0.0)
 	
@@ -472,3 +483,79 @@ func apply_watcher_hit() -> void:
 func apply_adrenaline_boost() -> void:
 	# 와쳐 등 적중 시 속도 유지 + 3초간 가속도 20% 보너스
 	_adrenaline_timer = 3.0
+
+# ── 수리 로직 ─────────────────────────────────────────────
+func repair_drivetrain(amount: float) -> void:
+	dur_drivetrain = minf(dur_drivetrain + amount, 100.0)
+
+func repair_worst_tire(amount: float) -> void:
+	var tires = [
+		{"name": "lf", "val": dur_lf_tire},
+		{"name": "rf", "val": dur_rf_tire},
+		{"name": "lb", "val": dur_lb_tire},
+		{"name": "rb", "val": dur_rb_tire}
+	]
+	tires.sort_custom(func(a, b): return a["val"] < b["val"])
+	
+	var worst = tires[0]["name"]
+	match worst:
+		"lf": dur_lf_tire = minf(dur_lf_tire + amount, 100.0)
+		"rf": dur_rf_tire = minf(dur_rf_tire + amount, 100.0)
+		"lb": dur_lb_tire = minf(dur_lb_tire + amount, 100.0)
+		"rb": dur_rb_tire = minf(dur_rb_tire + amount, 100.0)
+
+# ── 부품 피해 적용 (GDD 05-parts.md §4.5) ──────────────────────
+# contact_type: "front" | "left" | "right" | "side_left" | "side_right" | "all"
+# tire_dmg: 해당 타이어 감소량(%), drivetrain_dmg: 구동계 감소량(%)
+func apply_part_damage(contact_type: String, tire_dmg: float, drivetrain_dmg: float = 0.0) -> void:
+	match contact_type:
+		"front":
+			# 정면 충돌 → LF + RF 동시
+			dur_lf_tire     = maxf(dur_lf_tire     - tire_dmg, 0.0)
+			dur_rf_tire     = maxf(dur_rf_tire     - tire_dmg, 0.0)
+		"left":
+			# 좌측 (갓길 좌측 회피) → LF 단독
+			dur_lf_tire     = maxf(dur_lf_tire     - tire_dmg, 0.0)
+		"right":
+			# 우측 (갓길 우측 회피) → RF 단독
+			dur_rf_tire     = maxf(dur_rf_tire     - tire_dmg, 0.0)
+		"side_left":
+			# 측면 후방 좌측 (앰부서 등) → LB
+			dur_lb_tire     = maxf(dur_lb_tire     - tire_dmg, 0.0)
+		"side_right":
+			# 측면 후방 우측 (앰부서 등) → RB
+			dur_rb_tire     = maxf(dur_rb_tire     - tire_dmg, 0.0)
+		"all":
+			# 전 방향 균등 (사슴머리, 창 등) → 5개 부품 균등
+			dur_lf_tire     = maxf(dur_lf_tire     - tire_dmg, 0.0)
+			dur_rf_tire     = maxf(dur_rf_tire     - tire_dmg, 0.0)
+			dur_lb_tire     = maxf(dur_lb_tire     - tire_dmg, 0.0)
+			dur_rb_tire     = maxf(dur_rb_tire     - tire_dmg, 0.0)
+	
+	if drivetrain_dmg > 0.0:
+		dur_drivetrain = maxf(dur_drivetrain - drivetrain_dmg, 0.0)
+
+# ── 구동계 간헐 정지 상태 (GDD §4.2: 30초마다 0.5초간 가속 무효) ──
+var _drivetrain_stall_timer: float = 30.0  # 다음 스탈까지 카운트다운
+var _drivetrain_stall_active: float = 0.0  # 현재 스탈 지속 시간
+
+func update_drivetrain_stall(delta: float) -> bool:
+	# 구동계가 정상이면 타이머 리셋하고 false 반환
+	if dur_drivetrain > 0.0:
+		_drivetrain_stall_timer = 30.0
+		_drivetrain_stall_active = 0.0
+		return false
+	
+	# 스탈 활성 중
+	if _drivetrain_stall_active > 0.0:
+		_drivetrain_stall_active -= delta
+		return true  # 가속 페달 무효
+	
+	# 스탈 카운트다운
+	_drivetrain_stall_timer -= delta
+	if _drivetrain_stall_timer <= 0.0:
+		_drivetrain_stall_timer = 30.0
+		_drivetrain_stall_active = 0.5  # 0.5초간 스탈
+		return true
+	
+	return false

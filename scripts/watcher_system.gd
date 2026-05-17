@@ -8,8 +8,10 @@ const BillboardManager = preload("res://scripts/billboard_manager.gd")
 var SPACING_Z      := 35.0    # 실제값은 spawn_config.gd에서 주입
 var SPAWN_CHANCE   := 0.42
 var seed_offset    := 0       # 스테이지마다 다른 배치를 위한 시드 오프셋
-const VISIBLE_DZ_MIN := -1.0
+const VISIBLE_DZ_MIN := 0.38
 const VISIBLE_DZ_MAX := 85.0
+const WZ_BASE_OFFSET := 20.0   # _watcher_at_k: k*SPACING_Z + 20 + jitter
+const WZ_MAX_JITTER  := 10.0
 
 # ── 충돌 튜닝 ────────────────────────────────────────────────
 const HIT_DZ         := 0.45
@@ -37,6 +39,7 @@ var _light_pool: LightMaterialPool
 var billboard_mgr: BillboardManager
 const POOL_SIZE := 20
 var jiwon_info: Dictionary = {}
+var _current_sanity_ratio: float = 1.0
 
 func _ready() -> void:
 	pass
@@ -62,7 +65,7 @@ func load_assets() -> void:
 	_light_pool = LightMaterialPool.new(POOL_SIZE, _AMBIENT_NORMAL, _AMBIENT_DARK)
 
 const _AMBIENT_NORMAL := Color(0.28, 0.25, 0.32, 1.0)
-const _AMBIENT_DARK   := Color(0.05, 0.04, 0.07, 1.0)  # 어두운 루트: 헤드라이트만 광원
+const _AMBIENT_DARK   := Color(0.24, 0.22, 0.26, 1.0)  # 어두운 루트: 헤드라이트 밖에서 희미하게 인지 가능하도록 최소 밝기 확보
 
 func set_dark_mode(is_dark: bool) -> void:
 	if _light_pool:
@@ -74,12 +77,13 @@ func _process(delta: float) -> void:
 		var frame_idx = int(floor(_anim_time * 6.0)) % _idle_textures.size()
 		_texture = _idle_textures[frame_idx]
 
-func update_state(p_scroll_z: float, p_lane_x: float, p_curve_x: PackedFloat32Array, p_hill_px: float, p_headlight_range: float = 1.0) -> void:
+func update_state(p_scroll_z: float, p_lane_x: float, p_curve_x: PackedFloat32Array, p_hill_px: float, p_headlight_range: float = 1.0, p_sanity_ratio: float = 1.0) -> void:
 	scroll_z = p_scroll_z
 	cam_x = p_lane_x
 	_curve_x = p_curve_x
 	hill_px = p_hill_px
 	_headlight_range = p_headlight_range
+	_current_sanity_ratio = p_sanity_ratio
 	_update_billboards()
 
 const OBJECT_WIDTH     := 0.9     # 와쳐 자체 너비
@@ -112,13 +116,18 @@ func check_collision(vehicle: LastRoadVehicle) -> bool:
 		
 		_hit_info[k] = {
 			"until_z": wz + HIT_COOLDOWN_Z,
-			"hit_time": _anim_time
+			"hit_time": _anim_time,
+			"is_hallucination": bool(o.get("is_hallucination", false))
 		}
 		
 		# 충돌 효과는 game_world.gd에서 처리 (apply_watcher_hit + 정신력 감소)
 		hit = true
 		break
 	return hit
+
+func is_hit_hallucination(k: int) -> bool:
+	if not _hit_info.has(k): return false
+	return bool(_hit_info[k].get("is_hallucination", false))
 
 func _is_hit_active(k: int) -> bool:
 	if not _hit_info.has(k):
@@ -142,6 +151,13 @@ func _watcher_at_k(k: int) -> Dictionary:
 	var lane := int(floor(BillboardManager.get_rand01(k * 13331 + 53, seed_offset) * 3.0)) - 1
 	var wz := float(k) * SPACING_Z + 20.0 + BillboardManager.get_rand01(k * 13331 + 101, seed_offset) * 10.0
 	
+	# 정신력이 낮을수록 환영 와쳐가 섞여 나옴
+	var is_hallucination := false
+	if _current_sanity_ratio < 0.4:
+		var hal_r := BillboardManager.get_rand01(k * 13331 + 227, seed_offset)
+		if hal_r < 0.2: # 20% 확률로 환영
+			is_hallucination = true
+	
 	if jiwon_info.has("wz"):
 		var j_wz: float = jiwon_info["wz"]
 		var j_lane: int = jiwon_info["lane"]
@@ -156,18 +172,17 @@ func _watcher_at_k(k: int) -> Dictionary:
 				lane = j_lane + 1
 				if lane > 1: lane = -1
 				
-	return { "k": k, "lane": lane, "wz": wz }
+	return { "k": k, "lane": lane, "wz": wz, "is_hallucination": is_hallucination }
 
 
 func _update_billboards() -> void:
 	if _texture == null or billboard_mgr == null:
 		return
 	
-	var k_min := int(floor((scroll_z + VISIBLE_DZ_MIN) / SPACING_Z))
-	var k_max := int(ceil((scroll_z + VISIBLE_DZ_MAX) / SPACING_Z))
+	var kr := BillboardManager.visible_k_range(scroll_z, SPACING_Z, VISIBLE_DZ_MIN, VISIBLE_DZ_MAX, WZ_BASE_OFFSET, WZ_MAX_JITTER)
 	
 	var entries: Array = []
-	for k in range(k_min, k_max + 1):
+	for k in range(kr.x, kr.y + 1):
 		var o := _watcher_at_k(k)
 		if o.is_empty():
 			continue
@@ -175,9 +190,9 @@ func _update_billboards() -> void:
 		var dz := wz - scroll_z
 		
 		var is_hit = _is_hit_active(k)
-		if not is_hit and (dz <= -1.0 or dz > VISIBLE_DZ_MAX):
+		if not is_hit and (dz < VISIBLE_DZ_MIN or dz > VISIBLE_DZ_MAX):
 			continue
-			
+
 		var render_dz = dz
 		if is_hit and dz < 0.84:
 			render_dz = 0.84
@@ -209,6 +224,11 @@ func _update_billboards() -> void:
 		var w: float = h * float(tex_to_use.get_width()) / maxf(float(tex_to_use.get_height()), 1.0)
 		var fade: float = 1.0 - clampf((dz - VISIBLE_DZ_MAX * 0.75) / (VISIBLE_DZ_MAX * 0.25), 0.0, 1.0)
 		var light_h: float = proj.light_h
+		
+		# 환영 와쳐는 투명도 조절
+		var color := Color.WHITE
+		if bool(o.get("is_hallucination", false)):
+			color.a = 0.6
 
 		entries.append({
 			"depth": depth,
@@ -216,7 +236,8 @@ func _update_billboards() -> void:
 			"fade": fade,
 			"light_h": light_h,
 			"ground_y": float(proj.ground_y),
-			"tex": tex_to_use
+			"tex": tex_to_use,
+			"color": color
 		})
 
 	if _light_pool:
@@ -225,5 +246,4 @@ func _update_billboards() -> void:
 	for i in range(entries.size()):
 		var e = entries[i]
 		var mat := _light_pool.get_material(e.light_h) if _light_pool else null
-		billboard_mgr.add_entry(e.depth, e.rect, e.tex, e.fade, mat, Color.WHITE, false, float(e.light_h), float(e.ground_y))
-
+		billboard_mgr.add_entry(e.depth, e.rect, e.tex, e.fade, mat, e.color, false, float(e.light_h), float(e.ground_y))

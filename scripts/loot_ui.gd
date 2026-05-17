@@ -59,6 +59,17 @@ var _sort_btn    : Button
 var _title_lbl   : Label
 var _is_trunk_only : bool = false
 
+var _trunk_grid_parent : Control
+var _trunk_scroll_clip : Control
+var _trunk_scroll_y : float = 0.0
+var _wreck_scroll_y : float = 0.0
+
+var _is_hovering_trunk : bool = false
+var _is_hovering_wreck : bool = false
+var _is_dragging_scroll : bool = false
+var _drag_scroll_panel : String = ""
+var _last_mouse_y : float = 0.0
+
 # ── 내구도 UI 노드 ──────────────────────────────────────────
 var _durability_panel: Control
 var _drivetrain_rect: TextureRect
@@ -66,6 +77,7 @@ var _lf_tire_rect: TextureRect
 var _rf_tire_rect: TextureRect
 var _lb_tire_rect: TextureRect
 var _rb_tire_rect: TextureRect
+var _dur_labels: Dictionary = {} # part_name -> Label
 
 # ─────────────────────────────────────────────────────────
 func _ready() -> void:
@@ -80,10 +92,15 @@ func open_trunk() -> void:
 	_wreck_scroll_clip.visible = false
 	_search_lbl.visible = false
 	
+	_trunk_scroll_y = 0.0
+	if _trunk_grid_parent:
+		_trunk_grid_parent.position.y = 0.0
+	
 	_held_item = ""
 	_search_done = true
+	_rebuild_trunk_grid()
 	_refresh_trunk_ui()
-	_refresh_durability_ui()
+	refresh_durability_ui()
 	_root.visible = true
 
 # ── 외부에서 호출: 폐차 오픈 ─────────────────────────────
@@ -94,6 +111,13 @@ func open_wreck(wreck_seed: int) -> void:
 	_wreck_scroll_clip.visible = true
 	_search_lbl.visible = true
 
+	_trunk_scroll_y = 0.0
+	if _trunk_grid_parent:
+		_trunk_grid_parent.position.y = 0.0
+	_wreck_scroll_y = 0.0
+	if _wreck_grid_parent:
+		_wreck_grid_parent.position.y = 0.0
+
 	_wreck_rows = 10 + (wreck_seed % 7)   # 10~16행
 	_active_state = inv.get_or_generate_wreck_state(wreck_seed, _wreck_cols, _wreck_rows)
 	_wreck_items = _active_state["items"]
@@ -103,14 +127,16 @@ func open_wreck(wreck_seed: int) -> void:
 	_search_done  = _active_state["search_done"]
 	_held_item    = ""
 	_rebuild_wreck_grid()
+	_rebuild_trunk_grid()
 	_refresh_trunk_ui()
-	_refresh_durability_ui()
+	refresh_durability_ui()
 	_root.visible = true
 
 func close() -> void:
 	_root.visible = false
-	_held_item = ""
-	_update_drag_vis()
+	_is_dragging_scroll = false
+	_drag_scroll_panel = ""
+	_return_held_item()
 	loot_ui_closed.emit()
 
 func is_open() -> bool:
@@ -119,6 +145,17 @@ func is_open() -> bool:
 # ─────────────────────────────────────────────────────────
 func _process(delta: float) -> void:
 	if not is_open(): return
+
+	if _is_dragging_scroll and _drag_scroll_panel != "":
+		if not Input.is_mouse_button_pressed(MOUSE_BUTTON_LEFT):
+			_is_dragging_scroll = false
+			_drag_scroll_panel = ""
+		else:
+			var curr_mouse_y := get_viewport().get_mouse_position().y
+			var diff := curr_mouse_y - _last_mouse_y
+			if abs(diff) > 0.01:
+				_scroll_panel_pixels(_drag_scroll_panel, diff)
+				_last_mouse_y = curr_mouse_y
 
 	# 드래그 팔로우
 	if _held_item != "":
@@ -138,8 +175,9 @@ func _process(delta: float) -> void:
 		_tooltip_panel.position = Vector2(tx, ty)
 
 	_process_search_bar()
-
-	if _search_done: return
+	
+	# 트렁크만 보는 모드이거나 수색이 완료되었으면 중단
+	if _is_trunk_only or _search_done: return
 
 	var loot_speed_mult := 1.25 if (meta and meta.has_perk("fast_loot")) else 1.0
 	_search_timer += delta * loot_speed_mult
@@ -295,15 +333,18 @@ func _build_ui() -> void:
 func _build_trunk_panel() -> void:
 	var panel_x := 30.0
 	var panel_y := 60.0
+	var grid_w := TRUNK_COLS * (SLOT_W + SLOT_GAP)
+	# 트렁크는 기본 4줄 높이로 클리핑하여 일관된 레이아웃 보장
+	var clip_h := 4 * (SLOT_H + SLOT_GAP)
 
 	var bg := ColorRect.new()
 	bg.position = Vector2(panel_x - 6, panel_y - 30)
-	bg.size = Vector2(TRUNK_COLS * (SLOT_W + SLOT_GAP) + 12, 24 + TRUNK_ROWS * (SLOT_H + SLOT_GAP) + 60)
+	bg.size = Vector2(grid_w + 12, clip_h + 40)
 	bg.color = CrtTheme.BG_PANEL
 	_root.add_child(bg)
 
 	var lbl := Label.new()
-	lbl.text = "내 차 트럭크"
+	lbl.text = "내 차 트렁크"
 	lbl.position = Vector2(panel_x, panel_y - 26)
 	CrtTheme.style_label(lbl, 14, CrtTheme.AMBER)
 	_root.add_child(lbl)
@@ -324,16 +365,51 @@ func _build_trunk_panel() -> void:
 	)
 	_root.add_child(_sort_btn)
 
+	# 트렁크 스크롤 클립 영역
+	_trunk_scroll_clip = Control.new()
+	_trunk_scroll_clip.position = Vector2(panel_x, panel_y)
+	_trunk_scroll_clip.size = Vector2(grid_w, clip_h)
+	_trunk_scroll_clip.clip_contents = true
+	_trunk_scroll_clip.mouse_filter = Control.MOUSE_FILTER_PASS
+	_trunk_scroll_clip.gui_input.connect(func(ev: InputEvent):
+		if ev is InputEventMouseButton:
+			var mb := ev as InputEventMouseButton
+			if mb.button_index == MOUSE_BUTTON_WHEEL_UP and mb.pressed:
+				_scroll_panel("trunk", 1.0)
+			elif mb.button_index == MOUSE_BUTTON_WHEEL_DOWN and mb.pressed:
+				_scroll_panel("trunk", -1.0)
+	)
+	_trunk_scroll_clip.mouse_entered.connect(func(): _is_hovering_trunk = true)
+	_trunk_scroll_clip.mouse_exited.connect(func(): _is_hovering_trunk = false)
+	_root.add_child(_trunk_scroll_clip)
+
+	_trunk_grid_parent = Control.new()
+	_trunk_grid_parent.position = Vector2.ZERO
+	_trunk_grid_parent.mouse_filter = Control.MOUSE_FILTER_PASS
+	_trunk_scroll_clip.add_child(_trunk_grid_parent)
+
+	# 초기 그리드 빌드 (open 시 다시 빌드될 수도 있음)
+	_rebuild_trunk_grid()
+
+func _rebuild_trunk_grid() -> void:
+	if not inv: return
+	for child in _trunk_grid_parent.get_children():
+		child.queue_free()
 	_trunk_slots.clear()
-	for row in TRUNK_ROWS:
+	
+	_trunk_grid_parent.size = Vector2(
+		TRUNK_COLS * (SLOT_W + SLOT_GAP),
+		inv.trunk_rows * (SLOT_H + SLOT_GAP)
+	)
+	
+	for row in inv.trunk_rows:
 		for col in TRUNK_COLS:
 			var s := _make_slot_node(
-				Vector2(panel_x + col * (SLOT_W + SLOT_GAP),
-						panel_y + row * (SLOT_H + SLOT_GAP)),
+				Vector2(col * (SLOT_W + SLOT_GAP), row * (SLOT_H + SLOT_GAP)),
 				"trunk", row * TRUNK_COLS + col
 			)
 			_trunk_slots.append(s)
-			_root.add_child(s)
+			_trunk_grid_parent.add_child(s)
 
 # ── 폐차 인벤 패널 ──────────────────────────────────────
 var _wreck_grid_parent : Control
@@ -370,6 +446,16 @@ func _build_wreck_panel() -> void:
 	_wreck_scroll_clip.size = Vector2(grid_w, panel_h - 10)
 	_wreck_scroll_clip.clip_contents = true
 	_wreck_scroll_clip.mouse_filter = Control.MOUSE_FILTER_PASS
+	_wreck_scroll_clip.gui_input.connect(func(ev: InputEvent):
+		if ev is InputEventMouseButton:
+			var mb := ev as InputEventMouseButton
+			if mb.button_index == MOUSE_BUTTON_WHEEL_UP and mb.pressed:
+				_scroll_panel("wreck", 1.0)
+			elif mb.button_index == MOUSE_BUTTON_WHEEL_DOWN and mb.pressed:
+				_scroll_panel("wreck", -1.0)
+	)
+	_wreck_scroll_clip.mouse_entered.connect(func(): _is_hovering_wreck = true)
+	_wreck_scroll_clip.mouse_exited.connect(func(): _is_hovering_wreck = false)
 	_root.add_child(_wreck_scroll_clip)
 
 	_wreck_grid_parent = Control.new()
@@ -455,6 +541,10 @@ func _build_durability_panel() -> void:
 	_drivetrain_rect.position = Vector2(50, 0)
 	_drivetrain_rect.size = Vector2(200, 480)
 	_durability_panel.add_child(_drivetrain_rect)
+	
+	var dl := _create_dur_label(Vector2(100, 480))
+	_durability_panel.add_child(dl)
+	_dur_labels["drivetrain"] = dl
 
 	# 타이어들
 	_lf_tire_rect = _create_tire_rect("res://Asset/Image/LF_tire.png", Vector2(10, 40))
@@ -470,15 +560,51 @@ func _create_tire_rect(path: String, pos: Vector2) -> TextureRect:
 	tr.position = pos
 	tr.size = Vector2(60, 100)
 	_durability_panel.add_child(tr)
+	
+	var label_pos := pos + Vector2(0, 105)
+	var dl := _create_dur_label(label_pos)
+	_durability_panel.add_child(dl)
+	
+	var part_name := path.get_file().get_basename().to_lower() # e.g. lf_tire
+	_dur_labels[part_name] = dl
+	
 	return tr
 
-func _refresh_durability_ui() -> void:
+func _create_dur_label(pos: Vector2) -> Label:
+	var l := Label.new()
+	l.position = pos
+	l.size = Vector2(60, 20)
+	l.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	CrtTheme.style_label(l, 12, CrtTheme.AMBER)
+	return l
+
+func refresh_durability_ui() -> void:
 	if not vehicle: return
 	_tint_durability(_drivetrain_rect, vehicle.dur_drivetrain)
 	_tint_durability(_lf_tire_rect, vehicle.dur_lf_tire)
 	_tint_durability(_rf_tire_rect, vehicle.dur_rf_tire)
 	_tint_durability(_lb_tire_rect, vehicle.dur_lb_tire)
 	_tint_durability(_rb_tire_rect, vehicle.dur_rb_tire)
+
+	_update_dur_label("drivetrain", vehicle.dur_drivetrain)
+	_update_dur_label("lf_tire",    vehicle.dur_lf_tire)
+	_update_dur_label("rf_tire",    vehicle.dur_rf_tire)
+	_update_dur_label("lb_tire",    vehicle.dur_lb_tire)
+	_update_dur_label("rb_tire",    vehicle.dur_rb_tire)
+
+func _update_dur_label(part: String, val: float) -> void:
+	if not _dur_labels.has(part): return
+	var l: Label = _dur_labels[part]
+	l.text = "%d%%" % clampi(int(val), 0, 100)
+	
+	# 수치에 따른 색상 변경
+	var ratio = val / 100.0
+	if ratio < 0.3:
+		l.add_theme_color_override("font_color", CrtTheme.RED_WARN)
+	elif ratio < 0.6:
+		l.add_theme_color_override("font_color", CrtTheme.AMBER)
+	else:
+		l.add_theme_color_override("font_color", CrtTheme.GREEN_DATA)
 
 func _tint_durability(tr: TextureRect, val: float) -> void:
 	var ratio = clampf(val / 100.0, 0.0, 1.0)
@@ -546,9 +672,29 @@ func _make_slot_node(pos: Vector2, panel_type: String, idx: int) -> Control:
 	s.add_child(prog)
 
 	# 입력 처리
+	s.gui_input.connect(func(ev: InputEvent):
+		if ev is InputEventMouseButton:
+			var mb := ev as InputEventMouseButton
+			if mb.button_index == MOUSE_BUTTON_WHEEL_UP and mb.pressed:
+				_scroll_panel(panel_type, 1.0)
+			elif mb.button_index == MOUSE_BUTTON_WHEEL_DOWN and mb.pressed:
+				_scroll_panel(panel_type, -1.0)
+	)
 	s.gui_input.connect(_on_slot_input.bind(panel_type, idx))
-	s.mouse_entered.connect(_on_slot_hover.bind(panel_type, idx))
-	s.mouse_exited.connect(func(): _tooltip_panel.visible = false)
+	s.mouse_entered.connect(func():
+		if panel_type == "wreck":
+			_is_hovering_wreck = true
+		elif panel_type == "trunk":
+			_is_hovering_trunk = true
+		_on_slot_hover(panel_type, idx)
+	)
+	s.mouse_exited.connect(func():
+		if panel_type == "wreck":
+			_is_hovering_wreck = false
+		elif panel_type == "trunk":
+			_is_hovering_trunk = false
+		_tooltip_panel.visible = false
+	)
 
 	return s
 
@@ -711,10 +857,21 @@ func _on_slot_input(ev: InputEvent, panel_type: String, idx: int) -> void:
 		_handle_click(panel_type, interaction_idx)
 	elif mb.button_index == MOUSE_BUTTON_RIGHT and mb.pressed:
 		if _held_item == "":
-			if _is_trunk_only:
-				_try_use_item(panel_type, interaction_idx)
-			else:
+			# 트렁크에 있는 소모품은 우클릭 시 즉시 사용
+			if panel_type == "trunk":
+				var item_id = str(inv.trunk[interaction_idx])
+				if item_id != "":
+					var data = inv.get_item_data(item_id)
+					if str(data.get("type", "")) == "consumable":
+						_try_use_item(panel_type, interaction_idx)
+						return
+			
+			# 그 외의 경우(폐차 -> 트렁크, 또는 트렁크 잡동사니)는 자동 이동
+			if not _is_trunk_only:
 				_auto_transfer_item(panel_type, interaction_idx)
+		else:
+			# 아이템을 들고 있을 때 우클릭하면 원래 자리로 복구
+			_return_held_item()
 
 func _try_use_item(panel_type: String, idx: int) -> void:
 	if panel_type != "trunk": return
@@ -807,6 +964,7 @@ func _try_place(panel_type: String, idx: int) -> void:
 		_held_from_idx = -1
 		_refresh_wreck_slot(idx)
 		_update_drag_vis()
+
 
 func _auto_transfer_item(panel_type: String, idx: int) -> void:
 	if panel_type == "trunk":
@@ -941,12 +1099,58 @@ func _update_drag_vis() -> void:
 	else:
 		drag_icon.visible = false
 
-# 우클릭으로 놓기 취소 (원래 슬롯 복귀)
+const SCROLL_SPEED := 35.0
+
+func _scroll_panel(panel_type: String, direction: float) -> void:
+	if panel_type == "trunk":
+		if not _is_hovering_trunk: return
+		if _trunk_grid_parent == null or _trunk_scroll_clip == null: return
+		var max_scroll: float = max(0.0, _trunk_grid_parent.size.y - _trunk_scroll_clip.size.y)
+		_trunk_scroll_y = clamp(_trunk_scroll_y + direction * SCROLL_SPEED, -max_scroll, 0.0)
+		_trunk_grid_parent.position.y = _trunk_scroll_y
+	elif panel_type == "wreck":
+		if not _is_hovering_wreck: return
+		if _wreck_grid_parent == null or _wreck_scroll_clip == null: return
+		var max_scroll: float = max(0.0, _wreck_grid_parent.size.y - _wreck_scroll_clip.size.y)
+		_wreck_scroll_y = clamp(_wreck_scroll_y + direction * SCROLL_SPEED, -max_scroll, 0.0)
+		_wreck_grid_parent.position.y = _wreck_scroll_y
+
+func _scroll_panel_pixels(panel_type: String, pixels: float) -> void:
+	if panel_type == "trunk":
+		if _trunk_grid_parent == null or _trunk_scroll_clip == null: return
+		var max_scroll: float = max(0.0, _trunk_grid_parent.size.y - _trunk_scroll_clip.size.y)
+		_trunk_scroll_y = clamp(_trunk_scroll_y + pixels, -max_scroll, 0.0)
+		_trunk_grid_parent.position.y = _trunk_scroll_y
+	elif panel_type == "wreck":
+		if _wreck_grid_parent == null or _wreck_scroll_clip == null: return
+		var max_scroll: float = max(0.0, _wreck_grid_parent.size.y - _wreck_scroll_clip.size.y)
+		_wreck_scroll_y = clamp(_wreck_scroll_y + pixels, -max_scroll, 0.0)
+		_wreck_grid_parent.position.y = _wreck_scroll_y
+
+# 우클릭으로 놓기 취소 및 왼쪽 드래그 스크롤 감지
 func _unhandled_input(ev: InputEvent) -> void:
 	if not is_open(): return
+	
 	if ev is InputEventMouseButton:
 		var mb := ev as InputEventMouseButton
-		if mb.button_index == MOUSE_BUTTON_RIGHT and mb.pressed and _held_item != "":
+		if mb.button_index == MOUSE_BUTTON_LEFT:
+			if mb.pressed:
+				# 아이템을 집고 있지 않을 때 드래그로 스크롤 가능하게
+				if _held_item == "":
+					if _is_hovering_wreck:
+						_is_dragging_scroll = true
+						_drag_scroll_panel = "wreck"
+						_last_mouse_y = get_viewport().get_mouse_position().y
+					elif _is_hovering_trunk:
+						_is_dragging_scroll = true
+						_drag_scroll_panel = "trunk"
+						_last_mouse_y = get_viewport().get_mouse_position().y
+			else:
+				# 왼쪽 클릭 해제 시 드래그 종료
+				_is_dragging_scroll = false
+				_drag_scroll_panel = ""
+		
+		elif mb.button_index == MOUSE_BUTTON_RIGHT and mb.pressed and _held_item != "":
 			_return_held_item()
 
 func _return_held_item() -> void:

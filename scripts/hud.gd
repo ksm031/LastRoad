@@ -3,6 +3,7 @@ extends CanvasLayer
 signal loot_prompt_clicked
 
 const RearviewRenderer = preload("res://scripts/rearview_renderer.gd")
+const SmokeParticle   = preload("res://scripts/smoke_particle.gd")
 
 # ╔══════════════════════════════════════════════════════════╗
 # ║  ★ 룸미러 마스킹 조정 — 여기서만 수정하세요            ║
@@ -43,6 +44,15 @@ var _rpm_pivot    : Node2D
 var _fuel_pivot   : Node2D
 var _fuel_warning_light: Sprite2D
 var _hud_spd      : Label
+var _hud_wealth   : Label
+var _engine_light  : Sprite2D
+var _tire_light    : Sprite2D
+var _drivetrain_dur: float = 100.0
+var _min_tire_dur  : float = 100.0
+
+var _sfx_impact  : AudioStreamPlayer
+var _sfx_repair  : AudioStreamPlayer
+var _sfx_warning : AudioStreamPlayer
 
 # ── 저연료 및 괴물 추격 시각 효과 ──────────────────────────────────
 var _low_fuel_overlay : ColorRect
@@ -90,17 +100,22 @@ var _subtitle_timer : float = 0.0
 
 # ── 점퍼 보닛 오버레이 ────────────────────────────────────────
 var _jumper_hood_overlay : Sprite2D
+var _smoke_textures      : Array[Texture2D] = []
+var _smoke_spawn_timer   : float = 0.0
+var _smoke_spawn_left    : int   = 0
 var _escape_gauge_bg     : ColorRect
 var _escape_gauge_fill   : ColorRect
 const ESCAPE_GAUGE_W     := 300.0
 const ESCAPE_GAUGE_H     := 10.0
 var _wheel_shake_icon    : Sprite2D
+
 ## 진동 트리거 — 외부(game_world) 및 내부 모두 이 함수만 사용
 func trigger_shake(type: String) -> void:
 	var def: Dictionary = SHAKE_DEFS.get(type, {})
 	if def.is_empty():
 		return
 	_shakes[type] = def["duration"]
+
 
 ## 진동 강도 비율 (0.0~1.0) — _update_shake 내부에서 사용
 func _shake_ratio(type: String) -> float:
@@ -159,6 +174,10 @@ var _safe_change_width : int   = 6    # 현재 스테이지 안전 구간 폭
 const CLICK_RADIUS := 16.0  # 커서 원의 반지름 (32x32 / 2), 관대한 클릭 판정에 사용
 
 func _ready() -> void:
+	_sfx_impact = AudioStreamPlayer.new(); add_child(_sfx_impact)
+	_sfx_repair = AudioStreamPlayer.new(); add_child(_sfx_repair)
+	_sfx_warning = AudioStreamPlayer.new(); add_child(_sfx_warning)
+	
 	_build_jumper_overlay()  # dashboard보다 먼저 추가 → 대시보드 뒤에 렌더
 	_build_dashboard()
 	_build_wipers()
@@ -177,7 +196,27 @@ func _ready() -> void:
 	_build_charm_ui()
 	update_radio_for_stage(1, 600.0)  # 스테이지 1 기본 초기화
 	_setup_cursor()
+	_load_smoke_textures()
 	set_process(true)
+
+func _load_smoke_textures() -> void:
+	_smoke_textures.clear()
+	for i in range(1, 19): # 01 ~ 18
+		var path := "res://Asset/Image/Particle/smoke_%02d.png" % i
+		if ResourceLoader.exists(path):
+			_smoke_textures.append(load(path))
+
+func spawn_smoke() -> void:
+	# 한 번 사용 시 여러 개의 파티클을 시간차를 두고 생성
+	_smoke_spawn_left = 8 # 총 8개의 연기 덩어리
+	_smoke_spawn_timer = 0.0
+
+func _actual_spawn_single_smoke() -> void:
+	if _smoke_textures.is_empty(): return
+	var start_pos := Vector2(300.0, 720.0)
+	start_pos.x += randf_range(-15.0, 15.0) # 퍼짐 정도
+	var p := SmokeParticle.new(_smoke_textures, start_pos)
+	add_child(p)
 
 func _setup_cursor() -> void:
 	# 두께 2px 흰색 속빈 원 커서
@@ -250,6 +289,14 @@ func _input(event: InputEvent) -> void:
 			return
 			
 	if event is InputEventMouseButton:
+		# 라디오 포커스(V 줌) 중 휠로 주파수 조절 — 평상시·다이얼 드래그 중에는 무시
+		if event.pressed and (event.button_index == MOUSE_BUTTON_WHEEL_UP or event.button_index == MOUSE_BUTTON_WHEEL_DOWN):
+			if _v_toggled and not _is_dragging_dial:
+				var dir := 1 if event.button_index == MOUSE_BUTTON_WHEEL_UP else -1
+				var amount := maxi(1, int(ceili(absf(event.factor))))
+				_adjust_radio_step(dir * amount)
+				return
+
 		# 클릭 중에는 커서 숨김, 뗄 때 복원
 		if event.button_index == MOUSE_BUTTON_LEFT or event.button_index == MOUSE_BUTTON_RIGHT:
 			if event.pressed:
@@ -357,11 +404,8 @@ func _input(event: InputEvent) -> void:
 		if _is_dragging_dial and _v_toggled:
 			_drag_accum += event.relative.x
 			if absf(_drag_accum) >= 10.0:
-				var steps = int(_drag_accum / 10.0)
-				var new_step = clampi(_radio_step + steps, 0, RADIO_TOTAL_STEPS - 1)
-				if new_step != _radio_step:
-					_radio_step = new_step
-					_update_radio_display()
+				var steps := int(_drag_accum / 10.0)
+				_adjust_radio_step(steps)
 				_drag_accum = fmod(_drag_accum, 10.0)
 
 func _process(delta: float) -> void:
@@ -405,6 +449,14 @@ func _process(delta: float) -> void:
 	if _wheel != null:
 		var ease_dash := smoothstep(0.0, 1.0, _dash_focus_t)
 		_wheel.modulate.a = 1.0 - ease_dash
+
+	# 연기 파티클 지속 생성 로직
+	if _smoke_spawn_left > 0:
+		_smoke_spawn_timer -= delta
+		if _smoke_spawn_timer <= 0.0:
+			_smoke_spawn_timer = randf_range(0.2, 0.4) # 다음 연기까지 간격
+			_smoke_spawn_left -= 1
+			_actual_spawn_single_smoke()
 
 	if _jumper_hood_overlay != null and _jumper_hood_overlay.visible:
 		if _jumper_crushed:
@@ -520,9 +572,25 @@ func _update_dashboard_details(delta: float) -> void:
 
 func on_rock_hit() -> void:
 	trigger_shake("rock")
+	play_sfx("impact")
 
 func on_watcher_hit() -> void:
 	trigger_shake("watcher")
+	play_sfx("impact")
+
+## 효과음 재생 (GDD: 타격감 개선용)
+func play_sfx(type: String) -> void:
+	var player : AudioStreamPlayer = null
+	match type:
+		"impact": player = _sfx_impact
+		"repair": player = _sfx_repair
+		"warning": player = _sfx_warning
+	
+	if player and not player.playing:
+		# TODO: 실제 사운드 파일 경로 할당 필요
+		# var sfx = load("res://Asset/Sound/" + type + ".wav")
+		# if sfx: player.stream = sfx
+		player.play()
 
 func _build_portrait_and_mirror() -> void:
 	_mirror_clip = Control.new()
@@ -777,6 +845,15 @@ func _is_safe_frequency() -> bool:
 		return false
 	return _radio_step >= int(_safe_zone[0]) and _radio_step <= int(_safe_zone[1])
 
+func _adjust_radio_step(delta: int) -> void:
+	if delta == 0:
+		return
+	var new_step := clampi(_radio_step + delta, 0, RADIO_TOTAL_STEPS - 1)
+	if new_step == _radio_step:
+		return
+	_radio_step = new_step
+	_update_radio_display()
+
 ## 라디오 표시 업데이트 (LCD 텍스처, 주파수 텍스트, 다이얼 회전)
 func _update_radio_display() -> void:
 	var freq := RADIO_FREQ_MIN + _radio_step * RADIO_FREQ_STEP
@@ -848,7 +925,7 @@ func _build_fuel_needle() -> void:
 	var tex := load("res://Asset/Image/fuel_icon.png")
 	if tex:
 		_fuel_warning_light.texture = tex
-		_fuel_warning_light.scale = Vector2(0.5, 0.5) # 아이콘 크기 조절
+		_fuel_warning_light.scale = Vector2(0.20, 0.20) # 아이콘 크기 추가 축소
 	_fuel_warning_light.modulate = Color(1.0, 0.1, 0.1, 1.0) # 기본 붉은색 틴트
 	_fuel_warning_light.visible = false
 	add_child(_fuel_warning_light)
@@ -892,6 +969,15 @@ func _build_labels() -> void:
 	_hud_spd.add_theme_color_override("font_color", Color(0.9, 0.9, 0.7))
 	add_child(_hud_spd)
 
+	_hud_wealth = Label.new()
+	if font_neo: _hud_wealth.add_theme_font_override("font", font_neo)
+	_hud_wealth.position = Vector2(980, 24)
+	_hud_wealth.size = Vector2(272, 32)
+	_hud_wealth.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
+	_hud_wealth.add_theme_font_size_override("font_size", 22)
+	_hud_wealth.add_theme_color_override("font_color", Color(0.95, 0.75, 0.15))
+	add_child(_hud_wealth)
+
 	var help := Label.new()
 	if font_neo: help.add_theme_font_override("font", font_neo)
 	help.position = Vector2(28, 54)
@@ -926,6 +1012,9 @@ func show_subtitle(bbcode_text: String, duration: float = 3.0) -> void:
 	_subtitle_label.modulate.a = 1.0
 	_subtitle_timer = duration
 
+func show_message(text: String, duration: float = 2.0) -> void:
+	show_subtitle(text, duration)
+
 
 ## 시각 효과 오버레이 생성 (저연료, 괴물 추격)
 func _build_visual_overlays() -> void:
@@ -944,6 +1033,27 @@ func _build_visual_overlays() -> void:
 	_monster_vignette.size = Vector2(1280.0, 720.0)
 	_monster_vignette.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	add_child(_monster_vignette)
+
+	# ── 차량 상태 경고등 (GDD §4.1, §4.2) ──
+	# 체크 엔진 (구동계)
+	_engine_light = Sprite2D.new()
+	var tex_engine := load("res://Asset/Image/car_icon.png")
+	if tex_engine:
+		_engine_light.texture = tex_engine
+		_engine_light.scale = Vector2(0.3, 0.3)
+		_engine_light.position = Vector2(480.0, 560.0) # 속도계 우측 상단 근처
+		_engine_light.modulate = Color(1.0, 0.6, 0.0, 0.0) # 오렌지색
+	add_child(_engine_light)
+
+	# 타이어 압력
+	_tire_light = Sprite2D.new()
+	var tex_tire := load("res://Asset/Image/wheel_icon.png")
+	if tex_tire:
+		_tire_light.texture = tex_tire
+		_tire_light.scale = Vector2(0.2, 0.2)
+		_tire_light.position = Vector2(365.0, 560.0) # RPM계 우측 상단 근처
+		_tire_light.modulate = Color(1.0, 1.0, 0.0, 0.0) # 노란색
+	add_child(_tire_light)
 
 ## 수색 프롬프트 UI 생성
 func _build_loot_prompt() -> void:
@@ -1203,10 +1313,12 @@ func hide_stage_overlay() -> void:
 func on_fuel_depleted() -> void:
 	trigger_shake("fuel")
 
-# ── 외부에서 매 프레임 호출 (차량 상태 갱신) ─────────────────────
-func update(speed: float, scroll_z: float, steering_angle: float, rpm: float, monster_distance: float, delta: float, fuel_ratio: float, sanity_ratio: float = 1.0, stage: int = 1, stage_dist: float = 0.0, stage_len: float = 600.0) -> void:
+## 외부에서 매 프레임 호출 (차량 상태 갱신)
+func update(speed: float, scroll_z: float, steering_angle: float, rpm: float, monster_distance: float, delta: float, fuel_ratio: float, sanity_ratio: float = 1.0, stage: int = 1, stage_dist: float = 0.0, stage_len: float = 600.0, drivetrain_dur: float = 100.0, min_tire_dur: float = 100.0, blood_orbs: int = 0, money: int = 0) -> void:
 	_fuel_ratio = fuel_ratio
 	_sanity_ratio = sanity_ratio
+	_drivetrain_dur = drivetrain_dur
+	_min_tire_dur = min_tire_dur
 	
 	_update_gauges(speed, rpm, fuel_ratio)
 	_update_shake(speed, scroll_z, steering_angle)
@@ -1225,6 +1337,25 @@ func update(speed: float, scroll_z: float, steering_angle: float, rpm: float, mo
 	if _hud_spd != null:
 		var progress := clampf(stage_dist / stage_len, 0.0, 1.0) * 100.0
 		_hud_spd.text = "ST%d [%.0f%%]  |  %.0f km/h  |  연료: %.1f L  |  정신력: %.0f%%  |  괴물: %.1f" % [stage, progress, speed, fuel_ratio * 40.0, sanity_ratio * 100.0, monster_distance]
+		
+	if _hud_wealth != null:
+		var money_str: String = ""
+		var m_val: int = money
+		var is_neg: bool = m_val < 0
+		m_val = abs(m_val)
+		if m_val == 0:
+			money_str = "0"
+		else:
+			while m_val > 0:
+				var rem: int = m_val % 1000
+				m_val /= 1000
+				if m_val > 0:
+					money_str = ",%03d" % rem + money_str
+				else:
+					money_str = str(rem) + money_str
+			if is_neg:
+				money_str = "-" + money_str
+		_hud_wealth.text = "₩%s  |  %d BO" % [money_str, blood_orbs]
 		
 	if _rearview_node != null:
 		_rearview_node.update_state(scroll_z, monster_distance, delta, _f_toggled)
@@ -1268,17 +1399,43 @@ func _update_visual_effects(monster_distance: float) -> void:
 		pass
 		_low_fuel_overlay.color = Color(0.0, 0.0, 0.0, dark_alpha)
 
-	# 괴물 거리 30.0 이하: 적색 비네트 깜빡임 (가까워질수록 강해짐)
+	# 괴물 거리 30.0 이하: 적색 비네트 깜빡임 (정신력 저하 시의 깜빡임은 제거됨)
 	if _monster_vignette != null:
 		var vig_alpha := 0.0
-		if monster_distance < 30.0:
-			# 30.0 → 0.0 에서 투명도 0 → 0.4, 빠른 맥동 효과
-			var base_a := lerpf(0.0, 0.40, 1.0 - monster_distance / 30.0)
-			# 거리가 가까울수록 깜빡이는 속도도 증가
-			var pulse_speed := lerpf(0.004, 0.012, 1.0 - monster_distance / 30.0)
-			var pulse := (sin(float(Time.get_ticks_msec()) * pulse_speed) + 1.0) * 0.5
-			vig_alpha = base_a * (0.4 + pulse * 0.6)
+		var sanity_factor := 0.0
+		
+		if monster_distance < 30.0 or sanity_factor > 0.0:
+			# 괴물 거리 기반 알파
+			var monster_a := 0.0
+			if monster_distance < 30.0:
+				monster_a = lerpf(0.0, 0.40, 1.0 - monster_distance / 30.0)
+			
+			# 정신력 기반 알파 (제거됨)
+			var sanity_a := sanity_factor * 0.3
+			
+			var base_a := maxf(monster_a, sanity_a)
+			
+			# 거리가 가깝거나 정신력이 낮을수록 깜빡이는 속도도 증가
+			var pulse_speed := lerpf(0.004, 0.015, maxf(1.0 - monster_distance / 30.0, sanity_factor))
+			var pulse_v := (sin(float(Time.get_ticks_msec()) * pulse_speed) + 1.0) * 0.5
+			vig_alpha = base_a * (0.3 + pulse_v * 0.7)
+			
 		_monster_vignette.color = Color(0.6, 0.0, 0.0, vig_alpha)
+
+	# ── 경고등 업데이트 (GDD §4.1, §4.2) ──
+	var pulse := (sin(float(Time.get_ticks_msec()) * 0.008) + 1.0) * 0.5
+	
+	if _engine_light:
+		if _drivetrain_dur <= 0.0:
+			_engine_light.modulate.a = 0.6 + 0.4 * pulse
+		else:
+			_engine_light.modulate.a = 0.0
+			
+	if _tire_light:
+		if _min_tire_dur <= 0.0:
+			_tire_light.modulate.a = 0.6 + 0.4 * pulse
+		else:
+			_tire_light.modulate.a = 0.0
 
 func _update_wipers(delta: float) -> void:
 	if _wiper_pivot_L == null or _wiper_pivot_R == null:
@@ -1428,7 +1585,8 @@ func _update_shake(speed: float, scroll_z: float, steering_angle: float) -> void
 		var icon_size = Vector2.ZERO
 		if _fuel_warning_light.texture:
 			icon_size = _fuel_warning_light.texture.get_size() * _fuel_warning_light.scale
-		_fuel_warning_light.position = FUEL_GAUGE_CENTER + offset + Vector2(-15.0, 10.0) - icon_size * 0.5
+		# 연료 게이지 바늘 중심 아래 약간 왼쪽에 배치
+		_fuel_warning_light.position = FUEL_GAUGE_CENTER + offset + Vector2(-6.0, 30.0) - icon_size * 0.5
 	if _mirror_clip != null:
 		_mirror_clip.position = MIRROR_MIN
 

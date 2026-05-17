@@ -28,12 +28,13 @@ func get_material(light_h: float, is_jumping: bool = false, jump_t: float = 0.0)
 	mat.set_shader_parameter("light_height", light_h)
 	
 	# 점퍼 등 특수 유닛을 위한 파라미터 (기본값 false/0.0)
+	# 풀 재사용 시 이전 슬롯이 점퍼였다면 jump_t가 남아있을 수 있으므로 둘 다 명시적으로 리셋
 	if is_jumping:
 		mat.set_shader_parameter("is_jumping", true)
 		mat.set_shader_parameter("jump_t", jump_t)
 	else:
-		# 이전 사용자가 점퍼였을 수 있으므로 리셋
 		mat.set_shader_parameter("is_jumping", false)
+		mat.set_shader_parameter("jump_t", 0.0)
 	
 	_current_idx += 1
 	return mat
