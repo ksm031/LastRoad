@@ -219,9 +219,9 @@ func _update_billboards() -> void:
 		var fade: float = 1.0 - clampf((dz - VISIBLE_DZ_MAX * 0.75) / (VISIBLE_DZ_MAX * 0.25), 0.0, 1.0)
 		var light_h: float = proj.light_h
 
-		# 지원은 무조건 환영이므로 투명도 0.6 적용
+		# 지원은 무조건 환영이므로 반투명
 		var color := Color.WHITE
-		color.a = 0.6
+		color.a = 0.35
 
 		entries.append({
 			"depth": depth,

@@ -110,15 +110,23 @@ func _build_ui() -> void:
 		var branch : int = int(perk["branch"])
 		var tier : int = int(perk["tier"])
 
-		# 같은 브랜치·티어 내에서 몇 번째인지 (2개면 좌우 배치, 1개면 가운데)
-		var same_tier := _get_perks_in(branch, tier)
-		var idx := same_tier.find(pid)
-		var count := same_tier.size()
+		var cx : float
+		var cy : float
 
-		var cx : float = BRANCH_X[branch]
-		if count == 2:
-			cx += (float(idx) - 0.5) * (BTN_W * 0.55)
-		var cy : float = TIER_Y[tier]
+		if branch == -1:
+			# locked_slot의 독립 좌표
+			cx = 1140.0
+			cy = 340.0
+		else:
+			# 같은 브랜치·티어 내에서 몇 번째인지 (2개면 좌우 배치, 1개면 가운데)
+			var same_tier := _get_perks_in(branch, tier)
+			var idx := same_tier.find(pid)
+			var count := same_tier.size()
+
+			cx = BRANCH_X[branch]
+			if count == 2:
+				cx += (float(idx) - 0.5) * (BTN_W * 0.55)
+			cy = TIER_Y[tier]
 
 		var btn := Button.new()
 		btn.text = str(perk["name"])
@@ -156,10 +164,20 @@ func _refresh_all() -> void:
 		return
 	_points_label.text = "보유 포인트: %dpt" % meta.total_points
 
+	var normal_unlocked_count := 0
+	for p in MetaProgression.PERKS:
+		if p["id"] != "locked_slot" and meta.has_perk(p["id"]):
+			normal_unlocked_count += 1
+
 	for perk in MetaProgression.PERKS:
 		var pid : String = perk["id"]
 		var btn : Button = _perk_buttons[pid]
 		var cost_lbl : Label = _perk_cost_labels[pid]
+
+		if pid == "locked_slot":
+			var show_locked := (normal_unlocked_count >= 20) or meta.locked_slot_unlocked
+			btn.visible = show_locked
+			cost_lbl.visible = show_locked
 
 		if meta.has_perk(pid):
 			# 해금됨

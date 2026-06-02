@@ -37,6 +37,13 @@ var _part_name_labels: Dictionary = {}  # part_id -> Label (flavor name)
 var _pip_containers: Dictionary = {}    # part_id -> HBoxContainer (visual pips)
 var _upgrade_btns: Dictionary = {}     # part_id -> Button
 
+# ── 부적 진열 & 슬롯머신용 ──
+var _displayed_charms: Array[String] = []
+var _charm_shop_btns: Array[Button] = []
+var _slot_machine_btn: Button
+var _charm_info_lbl: Label
+
+
 # Dragging
 var _held_item: String = ""
 var _held_from_type: String = "" # "trunk" | "shop"
@@ -54,6 +61,7 @@ func open(stage: int, p_upgrades: VehicleUpgradeSystem, p_meta: MetaProgression)
 	meta = p_meta
 	_mode = "shop"
 	_generate_shop_items()
+	_refresh_charm_shelf()
 	
 	_refresh_all_slots()
 	_refresh_money()
@@ -61,29 +69,7 @@ func open(stage: int, p_upgrades: VehicleUpgradeSystem, p_meta: MetaProgression)
 	_switch_mode("shop")
 	_root.visible = true
 
-func _on_buy_charm_pressed() -> void:
-	if inv.money < 3000:
-		_info_label.text = "부적을 구매할 돈이 부족합니다."
-		return
-	if charm_sys == null:
-		return
-		
-	# 랜덤으로 1개 선택
-	var keys = charm_sys.CHARM_DB.keys()
-	var new_charm = keys[randi() % keys.size()]
-	
-	if charm_sys.has_charm(new_charm):
-		_info_label.text = "이미 가지고 있는 부적입니다. 다시 시도해보세요."
-		return
-		
-	inv.money -= 3000
-	_refresh_money()
-	
-	var added = charm_sys.add_charm(new_charm)
-	if added:
-		var data = charm_sys.get_charm_data(new_charm)
-		_info_label.text = "새로운 부적 획득: " + data.get("name", "")
-	# 실패했다면 꽉 차서 charm_full 시그널이 발동된 상태일 것임
+
 
 func close() -> void:
 	_root.visible = false
@@ -219,21 +205,65 @@ func _build_ui() -> void:
 	CrtTheme.style_label(_info_label, 13, CrtTheme.RED_WARN)
 	_shop_panel.add_child(_info_label)
 
-	var charm_btn := Button.new()
-	charm_btn.text = "부적 뽑기 (₩3000)"
-	charm_btn.position = Vector2(260, 600)
-	charm_btn.size = Vector2(316, 48)
-	CrtTheme.style_button(charm_btn, 16)
-	charm_btn.pressed.connect(_on_buy_charm_pressed)
-	_shop_panel.add_child(charm_btn)
-
 	var next_btn := Button.new()
 	next_btn.text = "정비 완료 →"
-	next_btn.position = Vector2(260, 655)
+	next_btn.position = Vector2(260, 600)
 	next_btn.size = Vector2(316, 48)
 	CrtTheme.style_button(next_btn, 16)
 	next_btn.pressed.connect(func(): _switch_mode("route"))
 	_shop_panel.add_child(next_btn)
+
+	# ── 오른쪽 끝: 부적 진열 & 슬롯머신 패널 ──
+	const CHARM_PANEL_X := 980
+	const CHARM_PANEL_Y := PANEL_Y
+
+	CrtTheme.make_panel_bg(_shop_panel, Vector2(CHARM_PANEL_X, CHARM_PANEL_Y + 22), Vector2(285, 570))
+
+	var charm_title := Label.new()
+	charm_title.text = "부적 & 슬롯머신"
+	CrtTheme.style_label(charm_title, 14, CrtTheme.AMBER_BRIGHT)
+	charm_title.position = Vector2(CHARM_PANEL_X + 10, CHARM_PANEL_Y + 26)
+	_shop_panel.add_child(charm_title)
+
+	# 슬롯머신 버튼
+	_slot_machine_btn = Button.new()
+	_slot_machine_btn.text = "슬롯머신 돌리기\n(비용: ₩3000)"
+	_slot_machine_btn.position = Vector2(CHARM_PANEL_X + 15, CHARM_PANEL_Y + 65)
+	_slot_machine_btn.size = Vector2(255, 60)
+	CrtTheme.style_button(_slot_machine_btn, 14)
+	_slot_machine_btn.pressed.connect(_on_slot_machine_pressed)
+	_shop_panel.add_child(_slot_machine_btn)
+
+	# 진열대 안내 타이틀
+	var shelf_title := Label.new()
+	shelf_title.text = "오늘의 진열 부적 (₩3000)"
+	CrtTheme.style_label(shelf_title, 12, CrtTheme.AMBER_MID)
+	shelf_title.position = Vector2(CHARM_PANEL_X + 15, CHARM_PANEL_Y + 145)
+	_shop_panel.add_child(shelf_title)
+
+	# 부적 진열 슬롯 버튼들
+	_charm_shop_btns.clear()
+	for i in range(3): # 최대 3개 (rich_display 퍽 고려)
+		var cbtn := Button.new()
+		cbtn.text = "[빈 슬롯]"
+		cbtn.position = Vector2(CHARM_PANEL_X + 15, CHARM_PANEL_Y + 175 + i * 85)
+		cbtn.size = Vector2(255, 75)
+		cbtn.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+		CrtTheme.style_button(cbtn, 11)
+		cbtn.pressed.connect(_on_buy_displayed_charm_pressed.bind(i))
+		_shop_panel.add_child(cbtn)
+		_charm_shop_btns.append(cbtn)
+
+	# 부적 결과/설명 라벨
+	_charm_info_lbl = Label.new()
+	_charm_info_lbl.text = "슬롯머신 결과가 여기에 표시됩니다."
+	_charm_info_lbl.position = Vector2(CHARM_PANEL_X + 15, CHARM_PANEL_Y + 440)
+	_charm_info_lbl.size = Vector2(255, 140)
+	_charm_info_lbl.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	_charm_info_lbl.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	CrtTheme.style_label(_charm_info_lbl, 11, CrtTheme.AMBER_DIM)
+	_shop_panel.add_child(_charm_info_lbl)
+
 
 	# ── 가운데: 내 인벤 ──────────────────────────────────────
 	const TRUNK_X := 260
@@ -328,6 +358,25 @@ func _generate_shop_items() -> void:
 			if _can_fit("shop", item_id, i):
 				_shop_items[i] = item_id
 				break
+
+	# ── 부적 진열대 아이템 채우기 ──
+	_displayed_charms.clear()
+	if charm_sys != null:
+		var charm_count := 3 if (meta != null and meta.has_perk("rich_display")) else 2
+		var available_charms := charm_sys.CHARM_DB.keys()
+		
+		var pool := []
+		for c in available_charms:
+			var is_hidden := c.begins_with("H") or c == "H1" or c == "H2" or c == "H3" or c == "H4" or c == "H5"
+			if is_hidden and (meta == null or not meta.has_perk("unknown_relic")):
+				continue
+			if not charm_sys.has_charm(c):
+				pool.append(c)
+		
+		pool.shuffle()
+		for i in min(charm_count, pool.size()):
+			_displayed_charms.append(pool[i])
+
 
 func _refresh_money() -> void:
 	if inv: 
@@ -496,18 +545,19 @@ func _on_slot_input(ev: InputEvent, ptype: String, idx: int) -> void:
 		if item_id == "": return
 		if ptype == "trunk":
 			# 판매 (가치가 있는 모든 템 판매 가능: 잡품, 부품, 소모품 등)
-			inv.money += val
+			inv.money += _get_item_sell_price(item_id)
 			inv.trunk[interaction_idx] = ""
 			_refresh_money(); _refresh_all_slots()
 		elif ptype == "shop":
 			# 즉시 구매 (첫 빈칸)
-			if inv.money < val: _info_label.text = "자금이 부족합니다."; return
+			var buy_cost := _get_item_buy_price(item_id)
+			if inv.money < buy_cost: _info_label.text = "자금이 부족합니다."; return
 			var placed_idx = -1
 			for i in inv.trunk.size():
 				if _can_fit("trunk", item_id, i):
 					placed_idx = i; break
 			if placed_idx == -1: _info_label.text = "트렁크가 가득 찼습니다."; return
-			inv.money -= val
+			inv.money -= buy_cost
 			inv.trunk[placed_idx] = item_id
 			_shop_items.erase(interaction_idx)
 			_refresh_money(); _refresh_all_slots()
@@ -527,28 +577,35 @@ func _on_slot_input(ev: InputEvent, ptype: String, idx: int) -> void:
 				_info_label.text = "공간이 부족합니다."
 				return
 				
-			var held_val = int(inv.get_item_data(_held_item).get("value", 0))
 			if ptype == "trunk":
 				if _held_from_type == "shop":
-					if inv.money < held_val: _info_label.text = "자금이 부족합니다."; return
-					inv.money -= held_val
+					var buy_cost := _get_item_buy_price(_held_item)
+					if inv.money < buy_cost: _info_label.text = "자금이 부족합니다."; return
+					inv.money -= buy_cost
 				var swap = str(inv.trunk[idx])
 				inv.trunk[idx] = _held_item
 				if swap != "":
-					if _held_from_type == "shop": _shop_items[_held_from_idx] = swap; inv.money += int(inv.get_item_data(swap).get("value",0)) # 환불/판매 처리 단순화
-					else: inv.trunk[_held_from_idx] = swap
+					if _held_from_type == "shop": 
+						_shop_items[_held_from_idx] = swap
+						inv.money += _get_item_sell_price(swap)
+					else: 
+						inv.trunk[_held_from_idx] = swap
 			elif ptype == "shop":
 				# 상점에 놓기 = 판매 혹은 제자리 돌려놓기
 				if _held_from_type == "trunk":
-					inv.money += held_val
+					inv.money += _get_item_sell_price(_held_item)
 				var swap = str(_shop_items.get(idx, ""))
 				_shop_items[idx] = _held_item
 				if swap != "":
-					if _held_from_type == "trunk": inv.trunk[_held_from_idx] = swap; inv.money -= int(inv.get_item_data(swap).get("value",0))
-					else: _shop_items[_held_from_idx] = swap
+					if _held_from_type == "trunk": 
+						inv.trunk[_held_from_idx] = swap
+						inv.money -= _get_item_buy_price(swap)
+					else: 
+						_shop_items[_held_from_idx] = swap
 			
 			_held_item = ""; _held_from_type = ""; _held_from_idx = -1
 			_refresh_money(); _refresh_all_slots(); _update_drag_vis()
+
 
 func _update_drag_vis() -> void:
 	if _held_item == "": _drag_panel.visible = false; return
@@ -904,3 +961,126 @@ func _update_tooltip(mpos: Vector2) -> void:
 func _on_route_selected(rtype: String) -> void:
 	close()
 	depart_requested.emit(rtype)
+
+# ── 부적 진열 & 슬롯머신 로직 ───────────────────────────────────────
+
+func _get_item_buy_price(item_id: String) -> int:
+	if item_id == "": return 0
+	var data = inv.get_item_data(item_id) if inv else {}
+	var val = int(data.get("value", 0))
+	if item_id == "fuel_can" and meta != null and meta.has_perk("famous_shop"):
+		val = int(float(val) * 0.85)
+	return val
+
+func _get_item_sell_price(item_id: String) -> int:
+	if item_id == "": return 0
+	var data = inv.get_item_data(item_id) if inv else {}
+	var val = int(data.get("value", 0))
+	var is_charm := item_id.begins_with("charm_") or (data.get("type", "") == "charm")
+	if is_charm and meta != null and meta.has_perk("junk_collector"):
+		val *= 2
+	return val
+
+func _get_slot_machine_cost() -> int:
+	if meta != null and meta.has_perk("rusty_handle"):
+		return 2000
+	return 3000
+
+func _on_slot_machine_pressed() -> void:
+	if inv == null or charm_sys == null: return
+	var cost := _get_slot_machine_cost()
+	if inv.money < cost:
+		_charm_info_lbl.text = "자금이 부족합니다. (필요: ₩%d)" % cost
+		return
+		
+	inv.money -= cost
+	_refresh_money()
+	
+	# 성공률 판정: 기본 70%, slot_taming 퍽이 있으면 85%
+	var success_chance := 0.85 if (meta != null and meta.has_perk("slot_taming")) else 0.70
+	if randf() < success_chance:
+		# 성공: 무작위 부적 지급 (중복 획득 시 ₩2,500 환급)
+		var keys = charm_sys.CHARM_DB.keys()
+		var pool := []
+		for k in keys:
+			var is_hidden := k.begins_with("H") or k == "H1" or k == "H2" or k == "H3" or k == "H4" or k == "H5"
+			if is_hidden and (meta == null or not meta.has_perk("unknown_relic")):
+				continue
+			pool.append(k)
+			
+		var new_charm = pool[randi() % pool.size()]
+		var data = charm_sys.get_charm_data(new_charm)
+		var charm_name = data.get("name", "알 수 없는 부적")
+		
+		if charm_sys.has_charm(new_charm):
+			inv.money += 2500
+			_refresh_money()
+			_charm_info_lbl.text = "슬롯머신 성공!\n이미 보유한 부적 [%s]을(를) 뽑아 ₩2500 환급되었습니다." % charm_name
+		else:
+			var added = charm_sys.add_charm(new_charm)
+			if added:
+				_charm_info_lbl.text = "슬롯머신 대성공!\n부적 [%s]을(를) 획득하여 장착했습니다.\n(%s)" % [charm_name, data.get("desc", "")]
+			else:
+				# 장착 슬롯 가득 참
+				inv.money += cost
+				_refresh_money()
+				_charm_info_lbl.text = "부적 슬롯이 가득 찼습니다. 비용 ₩%d이(가) 환불되었습니다." % cost
+	else:
+		# 꽝: ₩500 환급
+		inv.money += 500
+		_refresh_money()
+		_charm_info_lbl.text = "아쉽게도 꽝입니다!\n위로금 ₩500이(가) 지급되었습니다."
+		
+	_refresh_charm_shelf()
+
+func _on_buy_displayed_charm_pressed(idx: int) -> void:
+	if inv == null or charm_sys == null or idx >= _displayed_charms.size(): return
+	var charm_id = _displayed_charms[idx]
+	if charm_id == "" or charm_id == "sold_out": return
+	
+	var cost := 3000
+	if inv.money < cost:
+		_charm_info_lbl.text = "자금이 부족합니다. (필요: ₩3000)"
+		return
+		
+	if charm_sys.has_charm(charm_id):
+		_charm_info_lbl.text = "이미 보유하고 있는 부적입니다."
+		return
+		
+	var added = charm_sys.add_charm(charm_id)
+	if added:
+		inv.money -= cost
+		_refresh_money()
+		_displayed_charms[idx] = "sold_out"
+		var data = charm_sys.get_charm_data(charm_id)
+		_charm_info_lbl.text = "[%s] 부적을 구매하여 장착했습니다." % data.get("name", "")
+		_refresh_charm_shelf()
+	else:
+		_charm_info_lbl.text = "부적 슬롯이 가득 차서 구매할 수 없습니다."
+
+func _refresh_charm_shelf() -> void:
+	var sm_cost := _get_slot_machine_cost()
+	_slot_machine_btn.text = "슬롯머신 돌리기\n(비용: ₩%d)" % sm_cost
+	
+	var max_slots := 3 if (meta != null and meta.has_perk("rich_display")) else 2
+	for i in range(_charm_shop_btns.size()):
+		var btn = _charm_shop_btns[i]
+		if i >= max_slots:
+			btn.visible = false
+			continue
+		btn.visible = true
+		
+		if i >= _displayed_charms.size():
+			btn.text = "[빈 슬롯]"
+			btn.disabled = true
+			continue
+			
+		var charm_id = _displayed_charms[i]
+		if charm_id == "sold_out" or charm_id == "":
+			btn.text = "[판매됨]"
+			btn.disabled = true
+		else:
+			var data = charm_sys.get_charm_data(charm_id)
+			btn.text = "%s\n%s" % [data.get("name", ""), data.get("desc", "")]
+			btn.disabled = false
+

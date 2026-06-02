@@ -85,20 +85,26 @@ const PART_DATA := {
 	}
 }
 
-func can_upgrade_part(part_id: String, current_money: int) -> bool:
+func can_upgrade_part(part_id: String, current_money: int, has_discount: bool = false) -> bool:
 	var lv = upgrades.get(part_id, 0)
 	if lv >= MAX_UPGRADE_LV: return false
-	return current_money >= UPGRADE_COSTS[lv]
+	var cost = UPGRADE_COSTS[lv]
+	if has_discount:
+		cost = int(float(cost) * 0.85)
+	return current_money >= cost
 
-func upgrade_part(part_id: String, current_money: int) -> Dictionary:
+func upgrade_part(part_id: String, current_money: int, has_discount: bool = false) -> Dictionary:
 	# 성공 시 { "success": true, "cost": int, "new_lv": int } 반환
-	if not can_upgrade_part(part_id, current_money):
+	if not can_upgrade_part(part_id, current_money, has_discount):
 		return {"success": false}
 	
 	var lv = upgrades[part_id]
 	var cost = UPGRADE_COSTS[lv]
+	if has_discount:
+		cost = int(float(cost) * 0.85)
 	upgrades[part_id] = lv + 1
 	return {"success": true, "cost": cost, "new_lv": upgrades[part_id]}
+
 
 func reset_upgrades() -> void:
 	for key in upgrades.keys():

@@ -13,13 +13,8 @@ const TRUNK_ROWS := 4
 const WRECK_COLS := 8   # 화면 맞게 조정
 const WRECK_ROWS := 10  # 기본 행 수 (랜덤으로 10~16)
 
-const SEARCH_TIME := 0.10   # 슬롯 1개당 수색 시간 (초)
-
-# ── 데이터 참조 ───────────────────────────────────────────
-var inv: InventoryManager
-var meta: MetaProgression
-var vehicle: LastRoadVehicle
-var charm_sys: CharmSystem
+const SEARCH_TIME := 0.10   # 슬롯 1개당 수색 시�var charm_sys: CharmSystem
+var game_world: Node = null
 var _wreck_seed: int = -1
 
 # ── 폐차 상태 ─────────────────────────────────────────────
@@ -180,12 +175,61 @@ func _process(delta: float) -> void:
 	if _is_trunk_only or _search_done: return
 
 	var loot_speed_mult := 1.25 if (meta and meta.has_perk("fast_loot")) else 1.0
+	if charm_sys and charm_sys.has_charm("bloody_coin"):
+		loot_speed_mult *= 2.0 # 피 묻은 동전: 수색 속도 2배
+
 	_search_timer += delta * loot_speed_mult
 	_active_state["search_timer"] = _search_timer
 	if _search_timer >= SEARCH_TIME:
 		_search_timer -= SEARCH_TIME
 		_active_state["search_timer"] = _search_timer
 		_reveal_next_slot()
+
+func _reveal_next_slot() -> void:
+	var total := _wreck_cols * _wreck_rows
+	while _search_slot < total:
+		if not _revealed[_search_slot]:
+			_revealed[_search_slot] = true
+			
+			# ── 자석 고양이 부적: 빈 칸 수색 시 15% 확률로 기름 1L 발견 ──
+			var slot_item := str(_wreck_items.get(_search_slot, ""))
+			if slot_item == "" and charm_sys and charm_sys.has_charm("magnetic_cat"):
+				var cat_chance := 0.15
+				if charm_sys.count_tag("LUCK") >= 2:
+					cat_chance = 0.25
+				if randf() < cat_chance:
+					if vehicle:
+						vehicle.fuel = minf(vehicle.fuel + 1.0, vehicle.fuel_max)
+						vehicle.fuel_ratio = vehicle.fuel / vehicle.fuel_max
+					
+					# 듀오 시너지: 자석 고양이 + 카니발 입장권 (빈 칸 발견 시 다음 폐차 거리 -30% 추가 발동)
+					if charm_sys.has_charm("carnival_ticket") and game_world and game_world.get("_scavenging"):
+						game_world._scavenging.next_car_dist_mult = 0.7
+
+					# 심리적 피드백: 슬롯을 연두색으로 플래시
+					var slot_ctrl := _wreck_slots[_search_slot] as Control
+					var bg := slot_ctrl.get_node_or_null("BG") as ColorRect
+					if bg:
+						var orig_color := bg.color
+						bg.color = Color(0.15, 0.55, 0.25, 0.9)  # 연두색 플래시
+						var tw := create_tween()
+						tw.tween_property(bg, "color", orig_color, 0.6)
+			
+			_refresh_wreck_slot(_search_slot)
+			_search_slot += 1
+			_active_state["search_slot"] = _search_slot
+			_update_search_label()
+			return
+		_search_slot += 1
+		_active_state["search_slot"] = _search_slot
+	
+	_search_done = true
+	_active_state["search_done"] = true
+	
+	# 카니발 입장권 단독 효과: 수색 완료 시 50% 확률로 다음 폐차 등장 거리 -30%
+	if charm_sys and charm_sys.has_charm("carnival_ticket") and not charm_sys.has_charm("magnetic_cat"):
+		if randf() < 0.5 and game_world and game_world.get("_scavenging"):
+			game_world._scavenging.next_car_dist_mult = 0.7)
 
 func _reveal_next_slot() -> void:
 	var total := _wreck_cols * _wreck_rows

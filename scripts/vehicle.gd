@@ -26,6 +26,11 @@ var fuel_rate     : float = FUEL_RATE_BASE
 var headlight_range : float = 1.0
 var traction_factor : float = 1.0  # 1.0 = 정상, < 1.0 = 미끄러움
 
+# ── 메타 퍽 적용 변수 ──
+var _meta_progression: Node = null
+var _cigarette_buff_time: float = 0.0
+var _emergency_fuel_timer: float = 5.0
+
 # ── 차량 내구도 상태 (신규 5파츠) ─────────────────────────────
 var dur_lf_tire     : float = 100.0  # 0~100%
 var dur_rf_tire     : float = 100.0
@@ -139,6 +144,9 @@ func apply_upgrades(system = null, meta = null) -> void:
 			# 기존 방식(Dictionary) 호환성 유지
 			upgrade_levels = system
 	
+	if meta:
+		_meta_progression = meta
+	
 	# ── 베이스 스탯 결정 (퍽 반영) ──
 	var p_accel_mult := 1.0
 	var p_brake_mult := 1.0
@@ -149,15 +157,8 @@ func apply_upgrades(system = null, meta = null) -> void:
 	var p_racer_mult := 1.0
 	var p_light_mult := 1.0
 	
-	if meta:
-		if meta.has_perk("accel"):      p_accel_mult *= 1.10
-		if meta.has_perk("brake"):      p_brake_mult *= 1.15
-		if meta.has_perk("handling"):   p_hand_mult  *= 1.15
-		if meta.has_perk("top_speed"):  p_speed_add  += 10.0
-		if meta.has_perk("racer"):      p_racer_mult *= 1.08
-		if meta.has_perk("fuel_cap"):   p_fuel_add   += 10.0
-		if meta.has_perk("fuel_eff"):   p_eff_mult   *= 0.90
-		if meta.has_perk("keen_eye"):   p_light_mult *= 1.20
+	if _meta_progression:
+		if _meta_progression.has_perk("keen_eye_new"):   p_light_mult *= 1.20
 	
 	# 엔진: 레벨당 최고속도 +15, 가속 +1.0
 	max_speed = (MAX_SPEED_BASE + p_speed_add + float(upgrade_levels["engine"]) * 15.0) * p_racer_mult
@@ -176,13 +177,32 @@ func apply_upgrades(system = null, meta = null) -> void:
 	brake_force = (BRAKE_FORCE_BASE + float(upgrade_levels["brakes"]) * 8.0) * p_brake_mult * p_racer_mult
 	
 	# 헤드라이트: 레벨당 조사 거리 +15%
-	headlight_range = (1.0 + float(upgrade_levels.get("headlight", 0)) * 0.15) * p_light_mult
+	var buff_mult := 1.5 if _cigarette_buff_time > 0.0 else 1.0
+	headlight_range = (1.0 + float(upgrade_levels.get("headlight", 0)) * 0.15) * p_light_mult * buff_mult
 	
 	# 현재 연료 비율 유지
 	fuel_ratio = fuel / fuel_max
 
+func apply_cigarette_buff(duration: float) -> void:
+	_cigarette_buff_time = duration
+	apply_upgrades(null, _meta_progression)
+
+func update_buffs(delta: float) -> void:
+	if _cigarette_buff_time > 0.0:
+		_cigarette_buff_time = maxf(_cigarette_buff_time - delta, 0.0)
+		if _cigarette_buff_time <= 0.0:
+			apply_upgrades(null, _meta_progression)
+
+func apply_emergency_repair() -> void:
+	if dur_lf_tire < 30.0:     dur_lf_tire = 30.0
+	if dur_rf_tire < 30.0:     dur_rf_tire = 30.0
+	if dur_lb_tire < 30.0:     dur_lb_tire = 30.0
+	if dur_rb_tire < 30.0:     dur_rb_tire = 30.0
+	if dur_drivetrain < 30.0:  dur_drivetrain = 30.0
+
 func _ready() -> void:
 	apply_upgrades()
+
 
 func _course_total_length() -> float:
 	if _course_length < 0.0:
@@ -404,7 +424,11 @@ func update_fuel(delta: float) -> void:
 	if fuel <= 0.0:
 		fuel = 0.0
 		fuel_ratio = 0.0
+		if _meta_progression != null and _meta_progression.has_perk("emergency_fuel"):
+			_emergency_fuel_timer = maxf(_emergency_fuel_timer - delta, 0.0)
 		return
+	else:
+		_emergency_fuel_timer = 5.0
 	# 소모량 = (속도 km/h → km/s) × 소모율(L/km) × 밸런스 배율
 	var drain_mult := FUEL_DRAIN_MULT
 	if dur_drivetrain <= 0.0:
@@ -419,6 +443,10 @@ func update_fuel(delta: float) -> void:
 func _get_effective_max_speed() -> float:
 	if fuel > 0.0:
 		return max_speed
+	
+	if _meta_progression != null and _meta_progression.has_perk("emergency_fuel") and _emergency_fuel_timer > 0.0:
+		return 20.0
+		
 	# 연료 0: 엔진 꺼짐 → 관성 주행, 최고속도 급감
 	return FUEL_EMPTY_MAX_SPD
 

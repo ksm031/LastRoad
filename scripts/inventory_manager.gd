@@ -49,8 +49,7 @@ func _init_trunk() -> void:
 
 func apply_meta(meta: MetaProgression) -> void:
 	trunk_rows = 4
-	if meta.has_perk("trunk_1"):     trunk_rows += 1
-	if meta.has_perk("vet_farmer"):  trunk_rows += 1
+	if meta.has_perk("trunk_expand"):     trunk_rows += 1
 	
 	trunk_size = trunk_cols * trunk_rows
 	
@@ -320,7 +319,7 @@ func sort_trunk() -> void:
 # ── 판매 로직 ──────────────────────────────────────────
 func sell_all_junk(meta: MetaProgression = null) -> int:
 	var total_earned := 0
-	var bonus_mult := 1.10 if (meta and meta.has_perk("vet_farmer")) else 1.0
+	var bonus_mult := 1.0
 	
 	for i in trunk.size():
 		var item_id = str(trunk[i])

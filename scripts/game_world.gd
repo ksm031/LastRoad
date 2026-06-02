@@ -24,6 +24,7 @@ var _camera   : Camera2D
 var _inv_mgr  : InventoryManager
 var _loot_ui  : LootUI
 var _active_wreck_seed: int = -1
+var _passenger_hallucination: PassengerHallucination
 
 # ── 점퍼 보닛 탑승 상태 ──────────────────────────────────────
 var _jumper_on_hood       : bool  = false
@@ -178,6 +179,10 @@ func _ready() -> void:
 	_blood_orbs = _BloodOrbScript.new()
 	_blood_orbs.billboard_mgr = _billboard_mgr
 	add_child(_blood_orbs)
+
+	# ── 조수석 환영 시스템 ──
+	_passenger_hallucination = PassengerHallucination.new()
+	add_child(_passenger_hallucination)
 
 	_vehicle = _VehicleScript.new(); add_child(_vehicle)
 	_vehicle.fuel_depleted.connect(func(): _hud.on_fuel_depleted())
@@ -425,6 +430,7 @@ func _process(delta: float) -> void:
 		_active_wreck_seed = -1
 	_vehicle.update_scroll(delta)
 	_vehicle.update_fuel(delta)
+	_vehicle.update_buffs(delta)
 	_vehicle.update_rpm(delta)
 	var curve_x := _vehicle.compute_strip_curve_offsets()
 	var hill_px := _vehicle.hill_offset_px()
@@ -465,6 +471,10 @@ func _process(delta: float) -> void:
 			_jumper_escape_gauge = 0.0
 			_hud.set_jumper_on_hood(false, false)
 		_stages_cleared_this_run += 1
+		
+		# 클리어 연출 시작 시 정신력 시각 효과 제거
+		_clear_sanity_effects()
+
 		if current_stage >= TOTAL_STAGES:
 			# 최종 스테이지 클리어 = 엔딩
 			_game_state = "stage_clear"
@@ -495,6 +505,8 @@ func _process(delta: float) -> void:
 	# ── 환각 영상 업데이트 (정신력 0일 때 주기적 재생) ──
 	if _hallucination:
 		_hallucination.update_sanity(_sanity_ratio, delta)
+	if _passenger_hallucination != null:
+		_passenger_hallucination.update_sanity(_sanity_ratio, delta)
 	
 	_update_backdrops(delta)
 	_update_backdrops_vertical(delta, hill_px)
@@ -552,18 +564,37 @@ func _process(delta: float) -> void:
 	if _rain._shader_mat:
 		_rain._shader_mat.set_shader_parameter("cam_center_uv", _camera.position / Vector2(BillboardManager.SCREEN_W, BillboardManager.SCREEN_H))
 		_rain._shader_mat.set_shader_parameter("cam_zoom", _camera.zoom.x)
-	# ── 정신력 기반 왜곡 ──
-	var threshold_p := 0.30 if _meta.has_perk("reality") else 0.40
+	# ── 정신력 기반 왜곡 및 무채색화 ──
+	var threshold_p := 0.30 if (_meta.has_perk("reality") or _meta.has_perk("reality_sense")) else 0.40
 	var dist_strength_p := 0.0
 	if _sanity_ratio < threshold_p:
 		dist_strength_p = (threshold_p - _sanity_ratio) / threshold_p
-		if _meta.has_perk("unyielding"):
+		if _meta.has_perk("unyielding") or _meta.has_perk("last_resort"): # last_resort가 unyielding 대체할 수도 있음
 			dist_strength_p *= 0.70
+
+	# ── 정신력 기반 무채색화 (Desaturation) ──
+	var desat_val := 0.0
+	var s_pct := _sanity_ratio * 100.0
+	if s_pct >= 70.0:
+		desat_val = 0.0
+	elif s_pct >= 50.0:
+		var t := (70.0 - s_pct) / 20.0
+		desat_val = lerpf(0.0, 0.3, t)
+	elif s_pct >= 30.0:
+		var t := (50.0 - s_pct) / 20.0
+		desat_val = lerpf(0.3, 0.6, t)
+	elif s_pct >= 10.0:
+		var t := (30.0 - s_pct) / 20.0
+		desat_val = lerpf(0.6, 0.85, t)
+	else:
+		var t := (10.0 - s_pct) / 10.0
+		desat_val = lerpf(0.85, 0.95, t)
 
 	if _pp_mat != null:
 		var max_dist_offset := 12.0
 		var cur_offset := dist_strength_p * max_dist_offset
 		_pp_mat.set_shader_parameter("offset", cur_offset)
+		_pp_mat.set_shader_parameter("desaturation", desat_val)
 		_pp_mat.set_shader_parameter("time_phase", Time.get_ticks_msec() * 0.001)
 
 	_road.update_state(_vehicle.scroll_z, _vehicle.cam_x, curve_x, hill_px, _vehicle.headlight_range)
@@ -606,14 +637,15 @@ func _process(delta: float) -> void:
 			_sanity_ratio -= 0.08
 			_hud.play_sfx("warning") # 환영은 기분 나쁜 소리
 		else:
-			# 실체 충돌: 기존 로직
+			# 실체 충돌: 정신력 회복 + 내구도 더 크게 소모
+			# 트레이드오프: 정신력을 지키려면 내구도를 희생해야 함
 			var wat_contact := _get_contact_side()
-			_vehicle.apply_part_damage(wat_contact, 3.0, 1.0)
+			_vehicle.apply_part_damage(wat_contact, 12.0, 4.0)  # 돌(5/1.5)보다 훨씬 큰 내구도 손상
 			if _charm_sys.has_charm("adrenaline_syringe"):
 				_vehicle.apply_adrenaline_boost()
 			else:
 				_vehicle.apply_watcher_hit()
-			_sanity_ratio -= 0.03  # GDD: 와쳐 정신력 -3
+			_sanity_ratio += 0.06  # 충격이 오히려 정신을 들게 함
 			_hud.on_watcher_hit()
 		
 		_sanity_ratio = clampf(_sanity_ratio, 0.0, 1.0)
@@ -629,14 +661,13 @@ func _process(delta: float) -> void:
 			_sanity_ratio -= 0.12 # 지원 환영은 더 큰 충격
 			_hud.play_sfx("warning")
 		else:
-			# jiwon: 와쳐와 동일
 			var jiw_contact := _get_contact_side()
-			_vehicle.apply_part_damage(jiw_contact, 3.0, 1.0)
+			_vehicle.apply_part_damage(jiw_contact, 12.0, 4.0)
 			if _charm_sys.has_charm("adrenaline_syringe"):
 				_vehicle.apply_adrenaline_boost()
 			else:
 				_vehicle.apply_watcher_hit()
-			_sanity_ratio -= 0.03
+			_sanity_ratio += 0.06
 			_hud.on_watcher_hit()
 			
 		_sanity_ratio = clampf(_sanity_ratio, 0.0, 1.0)
@@ -743,6 +774,18 @@ func _on_loot_prompt_clicked() -> void:
 		return  # 이미 열려 있음
 	_active_wreck_seed = wreck_seed
 	_loot_ui.open_wreck(wreck_seed)
+
+# ── 정신력 시각 효과 제거 (클리어 연출 시점) ───────────────────────────
+func _clear_sanity_effects() -> void:
+	if _pp_mat != null:
+		_pp_mat.set_shader_parameter("offset", 0.0)
+		_pp_mat.set_shader_parameter("desaturation", 0.0)
+	if _hallucination != null:
+		_hallucination.force_stop()
+	if _passenger_hallucination != null:
+		_passenger_hallucination.force_stop()
+	if _hud != null:
+		_hud.reset_sanity_visuals()
 
 # ── 다음 스테이지로 진행 (연출 시작) ──────────────────────────────────────
 func _advance_to_next_stage() -> void:
@@ -895,10 +938,12 @@ func _on_shop_depart_requested(route_type: String) -> void:
 	# 정신력: 50% 미만이면 50%까지 회복
 	if _sanity_ratio < 0.5:
 		_sanity_ratio = 0.5
-	if _meta.has_perk("strong_heart"):
-		_sanity_ratio = clampf(_sanity_ratio + 0.15, 0.0, 1.15)
-	else:
-		_sanity_ratio = clampf(_sanity_ratio, 0.0, 1.0)
+	_sanity_ratio = clampf(_sanity_ratio, 0.0, 1.0)
+
+	# 응급 수리 퍽: 스테이지 3 진입 시 30% 이하인 부품 30% 복구
+	if current_stage == 3 and _meta.has_perk("emergency_repair"):
+		_vehicle.apply_emergency_repair()
+
 
 	# ── route_type에 따른 스테이지 환경 적용 ──
 	_apply_route_modifiers(route_type)
@@ -984,8 +1029,12 @@ func _on_item_used(item_id: String) -> void:
 		_vehicle.fuel = minf(_vehicle.fuel + 10.0, _vehicle.fuel_max)
 		_vehicle.fuel_ratio = _vehicle.fuel / _vehicle.fuel_max
 	elif item_id == "cigarette":
-		# 담배: 정신력 20% 회복
-		_sanity_ratio = minf(_sanity_ratio + 0.20, 1.0)
+		# 담배: 정신력 20% 회복 (cigarette_taste 퍽 활성 시 30% 회복 및 버프 타이머 작동)
+		var amount := 0.20
+		if _meta != null and _meta.has_perk("cigarette_taste"):
+			amount = 0.30
+			_vehicle.apply_cigarette_buff(10.0)
+		_sanity_ratio = minf(_sanity_ratio + amount, 1.0)
 		_hud.spawn_smoke()
 	elif item_id == "patch_kit":
 		# 타이어 수리: 가장 상태가 나쁜 타이어 50% 수복
@@ -1049,6 +1098,7 @@ func _unhandled_input(event: InputEvent) -> void:
 		match event.keycode:
 			KEY_KP_0:
 				if _game_state == "playing":
+					_clear_sanity_effects()
 					_advance_to_next_stage()
 			KEY_KP_1:
 				_debug_stop_monster = not _debug_stop_monster

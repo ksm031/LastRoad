@@ -17,6 +17,8 @@ var hill_px: float = 0.0
 var _curve_x: PackedFloat32Array = PackedFloat32Array()
 var _headlight_range: float = 1.0
 
+var next_car_dist_mult: float = 1.0
+
 var _tex_car: Texture2D
 var billboard_mgr: BillboardManager
 var _light_pool: LightMaterialPool
@@ -96,6 +98,13 @@ func _car_at_k(k: int) -> Dictionary:
 	var side_r := BillboardManager.get_rand01(k * 57833 + 441, seed_offset)
 	var side := -1 if side_r < 0.5 else 1
 	var wz := float(k) * SPACING_Z + 20.0 + BillboardManager.get_rand01(k * 31415 + 88, seed_offset) * 20.0
+	
+	# 카니발 입장권 및 자석고양이 시너지로 다음 폐차 등장 거리 단축
+	var current_k := int(floor(scroll_z / SPACING_Z))
+	if k > current_k and next_car_dist_mult != 1.0:
+		var dist := wz - scroll_z
+		wz = scroll_z + dist * next_car_dist_mult
+
 	return {
 		"k": k,
 		"side": side,
@@ -133,6 +142,9 @@ func get_nearest_car() -> Dictionary:
 				best = o
 	if not best.is_empty():
 		best["dz"] = min_dz
+		# 플레이어가 폐차 근처로 오면 할인 배율 리셋
+		if min_dz < 10.0:
+			next_car_dist_mult = 1.0
 	return best
 
 func get_car_screen_rect(o: Dictionary) -> Rect2:

@@ -225,10 +225,10 @@ func _update_billboards() -> void:
 		var fade: float = 1.0 - clampf((dz - VISIBLE_DZ_MAX * 0.75) / (VISIBLE_DZ_MAX * 0.25), 0.0, 1.0)
 		var light_h: float = proj.light_h
 		
-		# 환영 와쳐는 투명도 조절
+		# 환영 와쳐는 반투명
 		var color := Color.WHITE
 		if bool(o.get("is_hallucination", false)):
-			color.a = 0.6
+			color.a = 0.35
 
 		entries.append({
 			"depth": depth,

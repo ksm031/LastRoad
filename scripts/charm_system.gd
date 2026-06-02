@@ -11,133 +11,201 @@ const MAX_CHARMS = 6
 # ── 부적 도감 (24종) ──
 # type: speed, economy, horror, survival
 const CHARM_DB := {
+	# 🚗 1. 스피드 빌드 (6종)
 	"nodding_dog": {
 		"name": "흔들리는 강아지 인형",
-		"desc": "속도가 최고속도의 90% 이상일 때, 정신력이 초당 1씩 서서히 회복된다.",
-		"type": "speed"
+		"desc": "최고속도의 80% 이상 유지 시 정신력 +1/초 회복. SPEED 태그 부적 1개당 회복량 +0.3/초",
+		"tags": ["SPEED"]
 	},
 	"rusty_compass": {
 		"name": "낡은 나침반",
-		"desc": "고속 주행 중 조향 시 차체 흔들림이 50% 감소한다.",
-		"type": "speed"
+		"desc": "주행속도 50km/h 이상 시 차선 변경 안정성 +50% (커브에서 차체 흔들림 감소)",
+		"tags": ["SPEED"]
 	},
 	"broken_speedometer": {
 		"name": "부서진 속도계",
-		"desc": "최고 속도 한계가 15% 상승하지만, 가속 페달을 밟는 동안 라디오 조작이 불가능하다.",
-		"type": "speed"
+		"desc": "최고속도 제한 +15%. 가속 페달 누르는 동안 라디오 주파수 조작 불가. SPEED 태그 3개 이상 시 패널티 무효",
+		"tags": ["SPEED", "RISK"]
 	},
 	"worn_brake_pad": {
 		"name": "마모된 브레이크 패드",
-		"desc": "가속 페달을 10초 이상 밟고 있으면 가속도가 30% 증가한다. (브레이크 사용 시 초기화)",
-		"type": "speed"
+		"desc": "가속만 10초 이상 연속 유지 시 가속도 +30%. 브레이크 시 게이지 초기화",
+		"tags": ["SPEED"]
 	},
 	"adrenaline_syringe": {
 		"name": "아드레날린 주사기",
 		"desc": "와쳐 등 괴물(적) 충돌 시 속도 감소 무효 + 3초간 가속도 +20%",
-		"type": "speed"
+		"tags": ["SPEED", "DURABILITY"]
 	},
 	"burnt_clutch": {
 		"name": "타버린 클러치",
-		"desc": "남은 연료가 30% 미만일 때, 최고 속도가 20% 증가한다.",
-		"type": "speed"
+		"desc": "남은 연료 30% 미만 시 최고속도 +20%",
+		"tags": ["SPEED", "RISK"]
 	},
 	
+	# 🔦 2. 파밍 빌드 (6종)
 	"bloody_coin": {
 		"name": "피 묻은 동전",
-		"desc": "폐차 수색 속도가 2배 빨라지지만, 정차 중 괴물 접근 속도가 1.5배가 된다.",
-		"type": "economy"
+		"desc": "갓길 폐차 수색 속도 2배. 정차 중 괴물 접근 속도 +50%. SCAVENGE 3개 이상 시 패널티 -25%",
+		"tags": ["SCAVENGE", "RISK"]
 	},
 	"magnetic_cat": {
 		"name": "자석 고양이",
-		"desc": "폐차 수색 시 '빈 칸'을 탐색할 때마다 15% 확률로 기름 1L를 획득한다.",
-		"type": "economy"
+		"desc": "폐차 수색 시 빈 칸 탐색마다 15% 확률로 기름 1L 발견. LUCK 2개 이상 시 25%로 상승",
+		"tags": ["SCAVENGE", "LUCK"]
 	},
 	"rusty_padlock": {
 		"name": "녹슨 자물쇠",
-		"desc": "트렁크 용량이 2칸 줄어드는 대신, 폐차 수색 시 '차량 부품'이 확정 1개 등장한다.",
-		"type": "economy"
+		"desc": "트렁크 -2칸. 폐차 수색 시 '차량 부품류' 잡품 최소 1개 확정 등장",
+		"tags": ["SCAVENGE"]
 	},
 	"golden_cog": {
 		"name": "황금 톱니바퀴",
-		"desc": "차체 내구도가 100%일 때, 상점에 잡품 판매 시 1.5배의 가격을 받는다.",
-		"type": "economy"
-	},
-	"gamblers_dice": {
-		"name": "도박사의 주사위",
-		"desc": "파밍 아이템 발견 시 50% 확률로 2개를 얻지만, 50% 확률로 아이템 대신 정신력을 10 잃는다.",
-		"type": "economy"
+		"desc": "5개 부품 모두 100% 유지 시 잡품 판매가 +50%",
+		"tags": ["SCAVENGE", "DURABILITY"]
 	},
 	"discarded_receipt": {
-		"name": "버려진 영수증",
-		"desc": "파츠 업그레이드 비용이 15% 할인된다. (상점 소모품 진열은 1칸 감소)",
-		"type": "economy"
+		"name": "수상한 영수증 묶음",
+		"desc": "정비소 파츠 업그레이드 비용 -15%. 다른 SCAVENGE 부적 1개당 추가 -3%",
+		"tags": ["SCAVENGE"]
+	},
+	"carnival_ticket": {
+		"name": "카니발 입장권",
+		"desc": "폐차 수색 완료 시 50% 확률로 다음 폐차 등장 거리 -30%",
+		"tags": ["SCAVENGE", "LUCK"]
 	},
 
+	# 📻 3. 정신력 빌드 (6종)
 	"freakish_antenna": {
 		"name": "기괴한 안테나",
-		"desc": "라디오가 노이즈 상태일 때, 괴물과의 거리가 서서히 멀어진다.",
-		"type": "horror"
+		"desc": "라디오가 죽음의 주파수에 점유된 상태에서 끄지 않으면 괴물과 거리 점진 증가 (정신력은 정상 감소)",
+		"tags": ["SANITY", "RISK"]
 	},
 	"distorted_mirror": {
 		"name": "일그러진 룸미러",
-		"desc": "점퍼(Jumper)를 떼어내는 데 성공하면 정신력을 25 회복한다.",
-		"type": "horror"
+		"desc": "차에 달라붙은 점퍼를 떼어내는 데 성공할 때마다 정신력 +25",
+		"tags": ["SANITY"]
 	},
 	"blind_owl": {
 		"name": "눈먼 부엉이 조각",
-		"desc": "헤드라이트를 완전히 끄고 주행하면 정신력이 자연 소모되지 않는다.",
-		"type": "horror"
+		"desc": "헤드라이트를 완전히 끄고 주행 중인 동안 정신력 감소량 0",
+		"tags": ["SANITY", "RISK"]
 	},
 	"half_smoked_cig": {
 		"name": "피우다 만 담배꽁초",
-		"desc": "담배 사용 시 즉시 회복량이 10으로 줄어들지만, 60초에 걸쳐 총 40을 추가 회복한다.",
-		"type": "horror"
+		"desc": "담배 사용 시 즉시 회복 -10. 대신 60초에 걸쳐 총 +40 회복",
+		"tags": ["SANITY"]
 	},
 	"torn_photo": {
 		"name": "찢어진 사진",
-		"desc": "정신력이 20 이하일 때, 연료 소모율이 30% 감소한다.",
-		"type": "horror"
+		"desc": "정신력 20 이하 시 연료 소모율 -30%",
+		"tags": ["SANITY", "RISK"]
 	},
-	"tangled_tape": {
-		"name": "감겨있는 카세트테이프",
-		"desc": "와쳐(Watcher)의 시선 게이지 상승 속도가 30% 감소한다.",
-		"type": "horror"
+	"cracked_hand_mirror": {
+		"name": "금이 간 손거울",
+		"desc": "환각 위협 충돌 시 (소멸 시) 정신력 +5. SANITY 3개 이상 시 +10",
+		"tags": ["SANITY"]
 	},
 
+	# 🛡️ 4. 생존 빌드 (7종)
 	"safe_drive_amulet": {
 		"name": "안전운전 부적",
-		"desc": "차체 내구도가 100%일 때, 모든 적의 접근 빈도 및 속도가 20% 감소한다.",
-		"type": "survival"
+		"desc": "5개 부품 모두 100% 유지 시 모든 적(괴물 포함) 접근 빈도·속도 -20%",
+		"tags": ["DURABILITY"]
 	},
 	"old_wiper_motor": {
 		"name": "낡은 와이퍼 모터",
-		"desc": "와이퍼 작동 중, 전방의 장애물이 희미하게 야광으로 빛나 강조된다.",
-		"type": "survival"
+		"desc": "와이퍼 작동 중 전방 장애물(포트홀·낙석)이 야광으로 강조 표시",
+		"tags": ["DURABILITY"]
 	},
 	"heavy_weight": {
 		"name": "무거운 추",
-		"desc": "제동력이 50% 상승하고 충돌 피해를 20% 줄여주지만, 최고 속도가 10% 감소한다.",
-		"type": "survival"
+		"desc": "브레이크 제동력 +50%, 충돌 피해 -20%, 최고속도 -10%. SPEED 태그 부적과 동시 장착 시 안티시너지",
+		"tags": ["DURABILITY"]
 	},
 	"punctured_tin": {
 		"name": "구멍 난 양철통",
-		"desc": "가속 페달에서 발을 떼고 타력 주행(Coasting) 시 연료가 미세하게 회복된다.",
-		"type": "survival"
+		"desc": "가속 페달에서 발을 떼고 타력 주행 시 연료 게이지 미세 회복",
+		"tags": ["DURABILITY", "SCAVENGE"]
 	},
 	"thick_patch": {
 		"name": "두꺼운 타이어 패치",
-		"desc": "타이어 펑크 시 공기압 자연 감소 속도가 50% 줄어든다.",
-		"type": "survival"
+		"desc": "타이어 1개 펑크 시 주행 페널티 -50% (쏠림·속도 감소 모두 절반)",
+		"tags": ["DURABILITY"]
 	},
 	"crash_test_dummy": {
 		"name": "단단한 더미 인형",
-		"desc": "스테이지당 1회 한정, 장애물 충돌로 인한 차체 내구도 감소를 무효화한다.",
-		"type": "survival"
+		"desc": "스테이지당 1회, 장애물 충돌로 인한 내구도 감소를 무효화. DURABILITY 3개 이상 시 스테이지당 2회로 증가",
+		"tags": ["DURABILITY"]
 	},
 	"weathered_pebble": {
 		"name": "풍화된 조약돌",
 		"desc": "포트홀·낙석 충돌 시 타이어 내구도 손상이 50% 감소하고, 5초간 괴물 접근 속도가 30% 느려진다.",
-		"type": "survival"
+		"tags": ["DURABILITY"]
+	},
+
+	# 🌀 5. 위험 빌드 (7종)
+	"bound_wristwatch": {
+		"name": "묶인 손목시계",
+		"desc": "한 스테이지 내 누적 정차 시간이 길수록 다음 스테이지 시작 시 정신력 회복 (최대 +50)",
+		"tags": ["RISK", "SCAVENGE"]
+	},
+	"empty_medicine_bottle": {
+		"name": "빈 약통",
+		"desc": "정신력 10 이하 시 모든 환각이 보이지 않게 됨. 단, 환각 위협 충돌 시 부품 손상이 정상 발생",
+		"tags": ["RISK", "SANITY"]
+	},
+	"rusty_razor": {
+		"name": "녹슨 면도날",
+		"desc": "부품 내구도 감소가 발생할 때마다 25% 확률로 ₩500 즉시 획득",
+		"tags": ["RISK", "SCAVENGE"]
+	},
+	"upside_down_talisman": {
+		"name": "거꾸로 달린 부적",
+		"desc": "다른 모든 부적의 페널티 -50%. 단, 보너스도 -25%",
+		"tags": ["RISK", "LUCK"]
+	},
+	"metal_cross": {
+		"name": "금속 십자가",
+		"desc": "괴물에게 잡히기 직전 1회에 한해 정신력 풀회복 + 가속 부스트 5초간 강제 발동",
+		"tags": ["RISK", "DEATH"]
+	},
+	"counterclockwise_doll": {
+		"name": "시계 반대방향 인형",
+		"desc": "사망 시 직전 스테이지 시작 지점으로 1회 부활. 단, 장착 중인 부적 1개 무작위 영구 소멸",
+		"tags": ["RISK", "LUCK", "DEATH"]
+	},
+	"headwind_amulet": {
+		"name": "역풍의 부적",
+		"desc": "괴물의 창에 명중당하는 순간 즉시 400km/h로 가속(1초) → 이후 6초간 엔진 동력 무효",
+		"tags": ["SPEED", "RISK"]
+	},
+
+	# 🗝️ 6. 히든 티어 (5종)
+	"dead_man_watch": {
+		"name": "죽은 자의 손목시계",
+		"desc": "한 런에 1회, 게임오버 발생 5초 전의 상태로 시간이 되돌아간다. 단 BO는 발동 시점의 -50%로 영구 감소",
+		"tags": ["RISK", "DEATH", "LUCK"]
+	},
+	"sixth_eye": {
+		"name": "여섯 번째 눈",
+		"desc": "정신력 40 이하에서 환각 위협이 미세한 푸른 빛으로 표시되어 실제와 구분 가능. 대신 모든 BO 획득량 -30%",
+		"tags": ["SANITY", "RISK"]
+	},
+	"black_fang": {
+		"name": "검은 송곳니",
+		"desc": "사슴머리를 80km/h 이상으로 통과할 때마다 BO +50 보너스. 단, 통과 시 정신력 추가 -10",
+		"tags": ["SPEED", "DEATH"]
+	},
+	"last_prayer": {
+		"name": "마지막 기도",
+		"desc": "부품 하나가 0% 도달 혹은 정신력 0 도달 직전, 부품 30%, 정신력 50, 연료 50% 회복 후 자동 소멸",
+		"tags": ["DEATH", "SANITY"]
+	},
+	"backward_radio": {
+		"name": "거꾸로 흐르는 라디오",
+		"desc": "죽음의 주파수 청취 중 다음 위협(앰부서·사슴머리·괴물의 창)이 발생 5초 전 라디오에서 미리 노출. 단 정신력 회복량 -50%",
+		"tags": ["SANITY", "LUCK"]
 	}
 }
 
@@ -201,3 +269,20 @@ func get_active_charms() -> Array[String]:
 
 func get_charm_data(charm_id: String) -> Dictionary:
 	return CHARM_DB.get(charm_id, {})
+
+# ── 부적 시너지 판단 헬퍼 ──
+func count_tag(tag: String) -> int:
+	var count := 0
+	for cid in active_charms:
+		var data = get_charm_data(cid)
+		var tags: Array = data.get("tags", [])
+		if tags.has(tag):
+			count += 1
+	return count
+
+func check_duo(a: String, b: String) -> bool:
+	return active_charms.has(a) and active_charms.has(b)
+
+func check_anti(a: String, b: String) -> bool:
+	return active_charms.has(a) and active_charms.has(b)
+

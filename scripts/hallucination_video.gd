@@ -220,6 +220,10 @@ func _finish_playback() -> void:
 func force_stop() -> void:
 	if _is_playing:
 		_finish_playback()
+	_manual_glitch = false
+	_glitch_rect.visible = false
+	if _glitch_mat:
+		_glitch_mat.set_shader_parameter("glitch_intensity", 0.0)
 
 func is_playing() -> bool:
 	return _is_playing or _manual_glitch

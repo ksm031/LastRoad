@@ -1006,14 +1006,19 @@ func _build_subtitles() -> void:
 	_subtitle_label.add_theme_constant_override("outline_size", 6)
 	add_child(_subtitle_label)
 
-func show_subtitle(bbcode_text: String, duration: float = 3.0) -> void:
+func show_subtitle(bbcode_text: String, duration: float = 3.0, is_system_msg: bool = false) -> void:
 	if _subtitle_label == null: return
+	# 정신력 10% 이하 시 일반 자막(시스템 메시지가 아닌 것) 강제 침묵
+	if _sanity_ratio <= 0.1 and not is_system_msg:
+		_subtitle_label.text = ""
+		return
 	_subtitle_label.text = "[center]" + bbcode_text + "[/center]"
 	_subtitle_label.modulate.a = 1.0
 	_subtitle_timer = duration
 
 func show_message(text: String, duration: float = 2.0) -> void:
-	show_subtitle(text, duration)
+	show_subtitle(text, duration, true)
+
 
 
 ## 시각 효과 오버레이 생성 (저연료, 괴물 추격)
@@ -1313,12 +1318,31 @@ func hide_stage_overlay() -> void:
 func on_fuel_depleted() -> void:
 	trigger_shake("fuel")
 
+## 정신력 관련 시각 효과를 즉시 리셋 (클리어 연출용)
+func reset_sanity_visuals() -> void:
+	_sanity_ratio = 1.0
+	_shakes.clear()
+	_update_portrait_blink(0.0)
+	_update_shake(0.0, 0.0, 0.0)
+
 ## 외부에서 매 프레임 호출 (차량 상태 갱신)
 func update(speed: float, scroll_z: float, steering_angle: float, rpm: float, monster_distance: float, delta: float, fuel_ratio: float, sanity_ratio: float = 1.0, stage: int = 1, stage_dist: float = 0.0, stage_len: float = 600.0, drivetrain_dur: float = 100.0, min_tire_dur: float = 100.0, blood_orbs: int = 0, money: int = 0) -> void:
 	_fuel_ratio = fuel_ratio
 	_sanity_ratio = sanity_ratio
 	_drivetrain_dur = drivetrain_dur
 	_min_tire_dur = min_tire_dur
+	
+	# 부적 슬롯 가림막 제어
+	var block_slot_3 := (sanity_ratio <= 0.1) # 4번 슬롯 (index 3)
+	var block_slot_4 := (sanity_ratio <= 0.3) # 5번 슬롯 (index 4)
+	
+	if _charm_icons.size() > 4:
+		var rect_3 = _charm_icons[3]["panel"].get_node_or_null("BlockRect")
+		if rect_3: rect_3.visible = block_slot_3
+		
+		var rect_4 = _charm_icons[4]["panel"].get_node_or_null("BlockRect")
+		if rect_4: rect_4.visible = block_slot_4
+
 	
 	_update_gauges(speed, rpm, fuel_ratio)
 	_update_shake(speed, scroll_z, steering_angle)
@@ -1646,8 +1670,28 @@ func _build_charm_ui() -> void:
 		lbl.text = ""
 		panel.add_child(lbl)
 		
+		# ── 조수석 환영에 따른 부적 잠금 오버레이 추가 ──
+		var block_rect = ColorRect.new()
+		block_rect.name = "BlockRect"
+		block_rect.set_anchors_preset(Control.PRESET_FULL_RECT)
+		block_rect.color = Color(0.12, 0.05, 0.05, 0.90)
+		block_rect.visible = false
+		block_rect.mouse_filter = Control.MOUSE_FILTER_STOP
+		
+		var block_lbl = Label.new()
+		block_lbl.text = "X"
+		block_lbl.set_anchors_preset(Control.PRESET_FULL_RECT)
+		block_lbl.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+		block_lbl.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+		block_lbl.add_theme_color_override("font_color", Color(0.9, 0.2, 0.2))
+		block_lbl.add_theme_font_size_override("font_size", 16)
+		block_rect.add_child(block_lbl)
+		
+		panel.add_child(block_rect)
+		
 		_charm_icons.append({"panel": panel, "label": lbl, "charm_id": ""})
 		hbox.add_child(panel)
+
 
 	# 7번째 부적 교체 UI 오버레이
 	_charm_swap_overlay = Control.new()
