@@ -51,6 +51,7 @@ var _light_pool: LightMaterialPool
 var billboard_mgr: BillboardManager
 const POOL_SIZE := 15
 var jiwon_info: Dictionary = {}
+var last_hit_k : int = -999999   # Doc 31 §4: 직전 충돌 인덱스 (즉시 처치 차단용)
 
 # 점프 애니메이션 완료 시 보닛 탑승 알림
 signal jumper_boarded
@@ -137,9 +138,15 @@ func check_collision(vehicle: LastRoadVehicle) -> bool:
 			"hit_time": _anim_time,
 			"jump_done": false
 		}
+		last_hit_k = k
 		hit = true
 		break
 	return hit
+
+# Doc 31 §4: 고속 즉시 처치 시 호출 — 점프→보드 연출/신호를 막고 즉시 제거.
+func kill_hit(k: int) -> void:
+	if _hit_info.has(k):
+		_hit_info[k]["jump_done"] = true   # _process의 jumper_boarded emit 차단 + 렌더 제외
 
 func _is_jumping(k: int) -> bool:
 	if not _hit_info.has(k):

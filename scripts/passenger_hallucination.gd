@@ -2,7 +2,6 @@ extends CanvasLayer
 class_name PassengerHallucination
 
 # ── 조수석 환영 노드 ──
-var _buckle_rect: ColorRect
 var _passenger_sprite: TextureRect
 
 var _buckle_timer: float = 0.0
@@ -21,19 +20,12 @@ func _ready() -> void:
 	_build_visuals()
 
 func _build_visuals() -> void:
-	# 안전벨트 버클 깜빡임 (X=1080-1180, Y=480-520 내)
-	_buckle_rect = ColorRect.new()
-	_buckle_rect.color = Color(1.0, 0.05, 0.05, 0.0)
-	_buckle_rect.position = Vector2(1120, 500)
-	_buckle_rect.size = Vector2(14, 22)
-	add_child(_buckle_rect)
-	
-	# 조수석 환영 스프라이트 (X=960-1180, Y=200-500)
+	# 조수석 환영 스프라이트 (화면 오른쪽 조수석 위치)
 	_passenger_sprite = TextureRect.new()
-	_passenger_sprite.position = Vector2(960, 200)
-	_passenger_sprite.size = Vector2(220, 300)
+	_passenger_sprite.position = Vector2(840, 60)
+	_passenger_sprite.size = Vector2(440, 660)
 	_passenger_sprite.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
-	_passenger_sprite.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
+	_passenger_sprite.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_COVERED
 	_passenger_sprite.modulate = Color(1.0, 1.0, 1.0, 0.0)
 	add_child(_passenger_sprite)
 
@@ -55,7 +47,6 @@ func update_sanity(sanity_ratio: float, delta: float) -> void:
 func _on_level_changed() -> void:
 	match _current_level:
 		0:
-			_buckle_rect.color.a = 0.0
 			_passenger_sprite.modulate.a = 0.0
 			if _master_volume_altered:
 				AudioServer.set_bus_volume_db(0, 0.0)
@@ -66,8 +57,8 @@ func _on_level_changed() -> void:
 				AudioServer.set_bus_volume_db(0, 0.0)
 				_master_volume_altered = false
 		2:
-			# 실루엣 로드
-			var tex = load("res://Asset/Image/Character/jiwon_body.png")
+			# 실루엿 로드
+			var tex = load("res://Asset/Image/jiwon_passenger_seat_01.png")
 			if tex:
 				_passenger_sprite.texture = tex
 			_passenger_sprite.modulate = Color(0.15, 0.15, 0.22, 0.5)
@@ -75,8 +66,8 @@ func _on_level_changed() -> void:
 				AudioServer.set_bus_volume_db(0, 0.0)
 				_master_volume_altered = false
 		3:
-			# 선명 실루엣 + 고개 돌림 (jiwon_injured.png)
-			var tex = load("res://Asset/Image/Character/jiwon_injured.png")
+			# 선명 실루엿 + 고개 돌림
+			var tex = load("res://Asset/Image/jiwon_passenger_seat_01.png")
 			if tex:
 				_passenger_sprite.texture = tex
 			_passenger_sprite.modulate = Color(0.6, 0.45, 0.45, 0.95)
@@ -88,15 +79,12 @@ func _on_level_changed() -> void:
 func _process_hallucination(sanity_ratio: float, delta: float) -> void:
 	if _current_level >= 1:
 		_buckle_timer += delta
-		var pulse := (sin(_buckle_timer * 7.0) + 1.0) * 0.5
-		_buckle_rect.color.a = pulse * 0.8
 		
 		# 5초 주기 버클 소리
 		if _buckle_timer >= 5.0:
 			_buckle_timer = 0.0
 			_play_sound("buckle_click")
 	else:
-		_buckle_rect.color.a = 0.0
 		_buckle_timer = 0.0
 		
 	if _current_level == 2:

@@ -145,7 +145,8 @@ func _build_ui() -> void:
 		"turbine": "터빈 (연비)",
 		"tires": "타이어 (조향)",
 		"brakes": "브레이크 (제동)",
-		"headlight": "헤드라이트 (시야)"
+		"headlight": "헤드라이트 (시야)",
+		"bumper": "범퍼 (전투)"
 	}
 
 	for pid in part_info:
@@ -189,14 +190,14 @@ func _build_ui() -> void:
 		# 4열: 업그레이드 버튼
 		var up_btn := Button.new()
 		up_btn.text = "₩0"
-		up_btn.custom_minimum_size = Vector2(214, 28)
+		up_btn.custom_minimum_size = Vector2(214, 22)  # 7행(범퍼 추가) 수용 위해 축소
 		CrtTheme.style_button(up_btn, 11)
 		up_btn.pressed.connect(_on_upgrade_pressed.bind(pid))
 		_upgrade_btns[pid] = up_btn
 		row.add_child(up_btn)
 		
 		_upgrade_container.add_child(row)
-		var line_spacer := Control.new(); line_spacer.custom_minimum_size = Vector2(0, 4); _upgrade_container.add_child(line_spacer)
+		var line_spacer := Control.new(); line_spacer.custom_minimum_size = Vector2(0, 2); _upgrade_container.add_child(line_spacer)
 
 	_info_label = Label.new()
 	_info_label.position = Vector2(260, 540)
@@ -363,11 +364,11 @@ func _generate_shop_items() -> void:
 	_displayed_charms.clear()
 	if charm_sys != null:
 		var charm_count := 3 if (meta != null and meta.has_perk("rich_display")) else 2
-		var available_charms := charm_sys.CHARM_DB.keys()
+		var available_charms = charm_sys.CHARM_DB.keys()
 		
 		var pool := []
 		for c in available_charms:
-			var is_hidden := c.begins_with("H") or c == "H1" or c == "H2" or c == "H3" or c == "H4" or c == "H5"
+			var is_hidden: bool = c.begins_with("H") or c == "H1" or c == "H2" or c == "H3" or c == "H4" or c == "H5"
 			if is_hidden and (meta == null or not meta.has_perk("unknown_relic")):
 				continue
 			if not charm_sys.has_charm(c):
@@ -435,6 +436,9 @@ func _refresh_upgrades() -> void:
 			"headlight":
 				cur_stat_str = "시야 %.1f배" % vehicle.headlight_range
 				if lv < upgrades.MAX_UPGRADE_LV: next_stat_str = " → %.1f" % (vehicle.headlight_range + 0.15)
+			"bumper":
+				# 전투 파츠: 실효 킬 임계 속도(낮을수록 좋음)를 대표 수치로 표시
+				cur_stat_str = "임계 %dkm/h" % int(vehicle.get_kill_threshold(80.0))
 		
 		_stat_labels[pid].text = cur_stat_str + next_stat_str
 		
@@ -976,7 +980,7 @@ func _get_item_sell_price(item_id: String) -> int:
 	if item_id == "": return 0
 	var data = inv.get_item_data(item_id) if inv else {}
 	var val = int(data.get("value", 0))
-	var is_charm := item_id.begins_with("charm_") or (data.get("type", "") == "charm")
+	var is_charm: bool = item_id.begins_with("charm_") or (data.get("type", "") == "charm")
 	if is_charm and meta != null and meta.has_perk("junk_collector"):
 		val *= 2
 	return val
@@ -1003,7 +1007,7 @@ func _on_slot_machine_pressed() -> void:
 		var keys = charm_sys.CHARM_DB.keys()
 		var pool := []
 		for k in keys:
-			var is_hidden := k.begins_with("H") or k == "H1" or k == "H2" or k == "H3" or k == "H4" or k == "H5"
+			var is_hidden: bool = k.begins_with("H") or k == "H1" or k == "H2" or k == "H3" or k == "H4" or k == "H5"
 			if is_hidden and (meta == null or not meta.has_perk("unknown_relic")):
 				continue
 			pool.append(k)
@@ -1083,4 +1087,3 @@ func _refresh_charm_shelf() -> void:
 			var data = charm_sys.get_charm_data(charm_id)
 			btn.text = "%s\n%s" % [data.get("name", ""), data.get("desc", "")]
 			btn.disabled = false
-

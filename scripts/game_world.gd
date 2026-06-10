@@ -28,9 +28,34 @@ var _passenger_hallucination: PassengerHallucination
 
 # ── 점퍼 보닛 탑승 상태 ──────────────────────────────────────
 var _jumper_on_hood       : bool  = false
-var _jumper_escape_gauge  : float = 0.0
-const JUMPER_ESCAPE_TARGET    := 240.0
-const JUMPER_ESCAPE_FILL_RATE := 40.0  # (조향 변화/최대조향) × 속도계수 × 이 값
+var _jumper_escape_gauge  : float = 0.0  # Doc 31 §4: 임계 속도 이상 유지 누적 시간(초)
+# Doc 31 §4: 점퍼 탈출 = 속도 기반 (게이지 흔들기 폐지)
+const JUMPER_KILL_THRESHOLD := 80.0   # 킬·탈출 임계 통일 (vehicle.get_kill_threshold로 하향)
+const JUMPER_KILL_BO        := 8      # 즉시 처치 / 탈출 성공 시 BO
+const JUMPER_ESCAPE_HOLD    := 0.5    # 임계 속도 이상 유지해야 탈출하는 시간(초)
+
+# ── 전투: 속도 임계 처치 (Doc 31 §1) ──────────────────────────
+# 적별 기본 임계 속도(km/h). 엔진 업그레이드로 하향됨(vehicle.get_kill_threshold).
+const WATCHER_KILL_THRESHOLD := 80.0
+const WATCHER_KILL_BO        := 3      # 관통 처치 시 획득 BO
+# 관통 처치(임계 이상): 내구도 소량 소모
+const PIERCE_TIRE_DMG        := 1.5
+const PIERCE_DRIVETRAIN_DMG  := 0.5
+# 충격 튕김(임계 미만): 내구도 대량 소모
+const BOUNCE_TIRE_DMG        := 6.0
+const BOUNCE_DRIVETRAIN_DMG  := 2.0
+
+# ── 전투: 처치 피드백 juice 상태 (Doc 31 §2) ──────────────────
+var _hitstop_active : bool  = false
+var _cam_shake_time : float = 0.0
+var _cam_shake_dur  : float = 0.1
+var _cam_shake_mag  : float = 0.0
+
+# ── 전투: 숨겨진 콤보 (Doc 31 §3) ─────────────────────────────
+# UI 없음. BO 배수 + 흡수음 pitch로만 체감. 연속 처치 간격이 윈도우 이내면 누적.
+var _combo_count  : int   = 0      # 0=없음, 누적 처치 수
+var _combo_timer  : float = 0.0    # 마지막 처치 이후 경과 시간(초)
+var _combo_window : float = 4.0    # 콤보 유지 한계(초). §7 '검은 장갑' 부적이 늘릴 예정
 
 
 var _prev_steering : float = 0.0
@@ -38,6 +63,8 @@ var _prev_steering : float = 0.0
 var _monster_distance: float = 350.0  # 초기 괴물 간격 (세계 단위)
 var _sanity_ratio: float = 1.0        # 정신력 (1.0 = 정상, 0.0 = 패닉)
 var _weathered_pebble_timer: float = 0.0
+var _cigarette_recovery_timer: float = 0.0
+var _cigarette_recovery_amount: float = 0.0
 
 # ── 스테이지 진행 시스템 ─────────────────────────────────────
 const MONSTER_SPEEDS := [70.0, 80.0, 90.0, 100.0, 110.0, 120.0]  # 스테이지 1~6
@@ -47,7 +74,7 @@ const TOTAL_STAGES  := 6
 var current_stage     : int   = 1
 var stage_start_z     : float = 0.0     # 스테이지 시작 시점의 scroll_z
 
-# 게임 상태: "main_menu", "playing", "stage_clear", "stage_exit", "game_over", "maintenance"
+# 게임 상태: "splash", "main_menu", "playing", "stage_clear", "stage_exit", "game_over", "maintenance"
 var _game_state       : String = "main_menu"
 var _state_timer      : float = 0.0
 const STAGE_CLEAR_DURATION := 3.0
@@ -57,6 +84,13 @@ const RETURN_TO_MENU_DELAY := 4.0   # 게임오버/클리어 후 메뉴 복귀�
 # ── 메인 메뉴 ──
 var _menu_layer : CanvasLayer
 var _menu_container : Control
+
+# ── 스플래시 화면 ──
+var _splash_layer : CanvasLayer
+var _splash_tween : Tween
+var _current_splash_index : int = 0
+var _godot_container : Control = null
+var _tpc_container : Control = null
 
 # ── 메타 진행 / 강화 ──
 var _pp_mat : ShaderMaterial
@@ -286,7 +320,9 @@ func _ready() -> void:
 
 	# ── 메인 메뉴 ──
 	_build_main_menu()
-	_show_main_menu()
+	if _menu_container != null:
+		_menu_container.visible = false
+	_start_splash_sequence()
 
 var _sky_sprite    : Sprite2D
 var _mtn_sprite    : Sprite2D
@@ -391,7 +427,7 @@ func _apply_bg_scroll() -> void:
 
 # ─────────────────────────────────────────────────────────────
 func _process(delta: float) -> void:
-	if _game_state == "main_menu":
+	if _game_state == "main_menu" or _game_state == "splash":
 		return
 
 	if _game_state == "game_over":
@@ -500,6 +536,13 @@ func _process(delta: float) -> void:
 			BillboardManager.add_impact_shake(0.15)
 	
 	
+	# 담배 점진적 정신력 회복 (4.5초에 걸쳐 회복)
+	if _cigarette_recovery_timer > 0.0:
+		var dt := minf(delta, _cigarette_recovery_timer)
+		_cigarette_recovery_timer -= dt
+		var recovery_step := (_cigarette_recovery_amount / 4.5) * dt
+		_sanity_ratio += recovery_step
+
 	_sanity_ratio = clampf(_sanity_ratio, 0.0, 1.0)
 	
 	# ── 환각 영상 업데이트 (정신력 0일 때 주기적 재생) ──
@@ -543,11 +586,17 @@ func _process(delta: float) -> void:
 		_camera.position = screen_center.lerp(target_camera_pos, dash_ease_t)
 	else:
 		var ease_t := smoothstep(0.0, 1.0, _hud._focus_t)
-		var target_camera_pos := Vector2(665.0, 120.0) 
+		var target_camera_pos := Vector2(665.0, 120.0)
 		_camera.zoom = Vector2(1.0, 1.0).lerp(Vector2(2.2, 2.2), ease_t)
 		_camera.position = screen_center.lerp(target_camera_pos, ease_t)
 
-	
+	# ── 처치 카메라 셰이크 (Doc 31 §2) ──
+	if _cam_shake_time > 0.0:
+		_cam_shake_time = maxf(_cam_shake_time - delta, 0.0)
+		var s := _cam_shake_mag * (_cam_shake_time / maxf(_cam_shake_dur, 0.001))
+		_camera.position += Vector2(randf_range(-s, s), randf_range(-s, s))
+
+
 	_rain.set_wiper_transforms(
 		_hud._wiper_pivot_L.global_position, _hud._wiper_pivot_L.global_rotation,
 		_hud._wiper_pivot_R.global_position, _hud._wiper_pivot_R.global_rotation
@@ -623,31 +672,17 @@ func _process(delta: float) -> void:
 		var obs_contact := _get_contact_side()
 		_vehicle.apply_part_damage(obs_contact, 5.0, 1.5)
 		_hud.on_rock_hit()
-	if _watchers.check_collision(_vehicle):
-		var is_hal := false
-		# 히트된 모든 인덱스 중 하나라도 환영이 있는지 체크
-		for k in _watchers._hit_info.keys():
-			if _watchers.is_hit_hallucination(k):
-				is_hal = true
-				break
-		
-		if is_hal:
+	# Doc 31 §6: 범퍼 Lv3 관통 — 한 프레임에 최대 N명 처치
+	var wat_hits := _watchers.check_collision(_vehicle, _vehicle.get_penetration_count())
+	for wh in wat_hits:
+		if bool(wh["is_hallucination"]):
 			# 환영 충돌: 글리치 효과 + 정신력 큰 감소 (-8%), 물리 피해 없음
 			if _hallucination: _hallucination.trigger_glitch(0.25)
 			_sanity_ratio -= 0.08
 			_hud.play_sfx("warning") # 환영은 기분 나쁜 소리
 		else:
-			# 실체 충돌: 정신력 회복 + 내구도 더 크게 소모
-			# 트레이드오프: 정신력을 지키려면 내구도를 희생해야 함
-			var wat_contact := _get_contact_side()
-			_vehicle.apply_part_damage(wat_contact, 12.0, 4.0)  # 돌(5/1.5)보다 훨씬 큰 내구도 손상
-			if _charm_sys.has_charm("adrenaline_syringe"):
-				_vehicle.apply_adrenaline_boost()
-			else:
-				_vehicle.apply_watcher_hit()
-			_sanity_ratio += 0.06  # 충격이 오히려 정신을 들게 함
-			_hud.on_watcher_hit()
-		
+			# 실체 충돌: 속도 임계 처치 판정 (Doc 31 §1)
+			_resolve_speed_kill(WATCHER_KILL_THRESHOLD, WATCHER_KILL_BO)
 		_sanity_ratio = clampf(_sanity_ratio, 0.0, 1.0)
 	if _jiwons.check_collision(_vehicle):
 		var is_hal := false
@@ -676,13 +711,18 @@ func _process(delta: float) -> void:
 		if _jumper_on_hood:
 			# 이미 탑승 중 → 보닛 점퍼 깔리는 연출 + 덜컹 효과
 			# GDD: 점퍼 충돌은 부품 손상 없음 (정신력 -1/초 비용으로 대체)
+			# Doc 31 §4: 두 번째 점퍼는 BO 없이 정신력만 깎임
 			_jumper_on_hood = false
 			_jumper_escape_gauge = 0.0
 			_hud.crush_jumper_on_hood()
 			_vehicle.apply_watcher_hit()
 			_sanity_ratio -= 0.08
 			_sanity_ratio = clampf(_sanity_ratio, 0.0, 1.0)
-		# 탑승 중이 아닐 때는 점프 애니메이션 진행 후 jumper_boarded 신호로 처리
+		elif _vehicle.speed >= _vehicle.get_kill_threshold(JUMPER_KILL_THRESHOLD):
+			# Doc 31 §4: 킬 임계 이상 → 즉시 처치, 보닛에 올라타지 않음
+			_resolve_speed_kill(JUMPER_KILL_THRESHOLD, JUMPER_KILL_BO)
+			_jumpers.kill_hit(_jumpers.last_hit_k)  # 점프→보드 연출 차단
+		# 임계 미만 + 미탑승 → 점프 애니메이션 진행 후 jumper_boarded 신호로 보닛 탑승
 
 	# ── 대각선 펑크 → 정신력 지속 감소 (GDD §4.1: 대각선 조합) ──
 	var _flat_lf := _vehicle.dur_lf_tire <= 0.0
@@ -696,32 +736,46 @@ func _process(delta: float) -> void:
 
 
 
-	# ── 보닛 위 점퍼 처리 ──
+	# ── 보닛 위 점퍼 처리 (Doc 31 §4: 속도 기반 탈출) ──
 	if _jumper_on_hood:
 		# 정신력 -1/초
 		_sanity_ratio -= 0.01 * delta
 		_sanity_ratio = clampf(_sanity_ratio, 0.0, 1.0)
 
-		# 탈출 게이지: 조향 변화 강도 × 속도 계수
-		var steering_delta: float = absf(_vehicle.steering_angle - _prev_steering)
-		var steering_velocity: float = steering_delta / maxf(delta, 0.001)
-		var speed_coeff: float = _vehicle.speed / 240.0
+		# 탈출: 임계 속도 이상을 hold_target초 유지하면 점퍼 분리
+		# fast_react 퍽은 필요한 유지 시간을 단축 (1.25배 빠름)
+		var esc_threshold: float = _vehicle.get_kill_threshold(JUMPER_KILL_THRESHOLD)
 		var react_mult: float = 1.25 if _meta.has_perk("fast_react") else 1.0
-		var fill: float = (steering_velocity / 35.0) * speed_coeff * JUMPER_ESCAPE_FILL_RATE * react_mult
-		_jumper_escape_gauge = minf(_jumper_escape_gauge + fill * delta, JUMPER_ESCAPE_TARGET)
-		_hud.update_escape_gauge(_jumper_escape_gauge / JUMPER_ESCAPE_TARGET)
+		var hold_target: float = JUMPER_ESCAPE_HOLD / react_mult
+		if _vehicle.speed >= esc_threshold:
+			_jumper_escape_gauge += delta
+		else:
+			_jumper_escape_gauge = 0.0  # 속도가 떨어지면 유지 시간 리셋
+		_hud.update_escape_gauge(clampf(_jumper_escape_gauge / hold_target, 0.0, 1.0))
 		_hud.sway_jumper(_vehicle.steering_angle)
 
-		if _jumper_escape_gauge >= JUMPER_ESCAPE_TARGET:
+		if _jumper_escape_gauge >= hold_target:
 			_jumper_on_hood = false
 			_jumper_escape_gauge = 0.0
 			_hud.set_jumper_on_hood(false, _vehicle.steering_angle > 0.0)
-			
+			# 탈출 성공 보상 + 처치 juice (콤보 적용)
+			var jmp_mult := _register_combo_kill()
+			var jmp_bo := int(round(float(JUMPER_KILL_BO) * jmp_mult))
+			_blood_orbs.award_bo(jmp_bo)
+			_hud.popup_bo(jmp_bo)
+			_hud.play_sfx("pickup", _combo_pitch())
+			_spawn_kill_mist(Vector2(640.0, 460.0))
 			if _charm_sys.has_charm("distorted_mirror"):
 				_sanity_ratio += 0.25
 				_sanity_ratio = clampf(_sanity_ratio, 0.0, 1.0)
 
 	_prev_steering = _vehicle.steering_angle
+
+	# ── 콤보 시간 감쇠 (Doc 31 §3) ──
+	if _combo_count > 0:
+		_combo_timer += delta
+		if _combo_timer > _combo_window:
+			_combo_count = 0  # 윈도우 초과 → 콤보 끊김
 
 	# ── 부적 시너지 (지속 효과) ──
 	if _charm_sys.has_charm("nodding_dog"):
@@ -741,6 +795,121 @@ func _get_contact_side() -> String:
 	elif _vehicle.cam_x > 0.2:
 		return "right"
 	return "front"
+
+# ── 전투: 속도 임계 처치 판정 (Doc 31 §1) ─────────────────────
+# base_threshold: 적별 기본 임계 속도(km/h). 엔진 업그레이드로 하향됨.
+# bo_reward: 관통 처치 성공 시 획득 BO.
+func _resolve_speed_kill(base_threshold: float, bo_reward: int) -> void:
+	var contact := _get_contact_side()
+	var eff_threshold := _vehicle.get_kill_threshold(base_threshold)
+	# 충돌 지점 화면 좌표 (도로 하단, 충돌 부위 방향으로 치우침)
+	var impact_x := 640.0 + (-160.0 if contact == "left" else (160.0 if contact == "right" else 0.0))
+	var impact_pos := Vector2(impact_x, 460.0)
+
+	if _vehicle.speed >= eff_threshold:
+		# ── 관통 처치: 모멘텀 유지, 내구도 소량(범퍼 Lv2 감소), BO 획득 ──
+		var pmul := _vehicle.get_pierce_dmg_mult()
+		_vehicle.apply_part_damage(contact, PIERCE_TIRE_DMG * pmul, PIERCE_DRIVETRAIN_DMG * pmul)
+		_vehicle.apply_pierce_kill()
+		if _charm_sys.has_charm("adrenaline_syringe"):
+			_vehicle.apply_adrenaline_boost()
+		# ── 숨겨진 콤보: 배수 적용 (Doc 31 §3) ──
+		var mult := _register_combo_kill()
+		var bo_gain := int(round(float(bo_reward) * mult))
+		_blood_orbs.award_bo(bo_gain)
+		_sanity_ratio += 0.06  # 시원한 처치가 정신을 들게 함
+		# ── juice: 히트스톱 + 미세 셰이크 + 붉은 안개 + BO 팝업 + 흡수음(콤보 pitch) ──
+		_do_hitstop(0.05)
+		_trigger_cam_shake(3.0, 0.1)
+		_spawn_kill_mist(impact_pos)
+		_hud.on_watcher_hit()       # 묵직한 타격음 + 대시보드 흔들림
+		_hud.play_sfx("pickup", _combo_pitch())  # BO 흡수 '띵' (콤보 단계만큼 음높이 상승)
+		_hud.popup_bo(bo_gain)
+	else:
+		# ── 충격 튕김: 급감속, 내구도 대량(스테이지1 완화), BO 없음 ──
+		# Doc 31 §9: 스테이지 1은 첫 실패가 런을 망치지 않도록 손상 완화
+		# Doc 31 §6 Lv4: 범퍼 중장갑 그릴이 튕김 손상 추가 경감
+		var dmg_mult := (0.4 if current_stage == 1 else 1.0) * _vehicle.get_bounce_dmg_mult()
+		_vehicle.apply_part_damage(contact, BOUNCE_TIRE_DMG * dmg_mult, BOUNCE_DRIVETRAIN_DMG * dmg_mult)
+		_vehicle.apply_bounce_hit()
+		_reset_combo()  # Doc 31 §3: 임계 미만 충돌(급감속)은 콤보 리셋
+		# ── juice: 히트스톱 없음, 더 강하고 긴 불쾌한 셰이크 + 금속 긁힘 ──
+		_trigger_cam_shake(6.0, 0.3)
+		BillboardManager.add_impact_shake(0.9)
+		_hud.trigger_shake("rock")  # mag 9 — 거칠고 불쾌한 흔들림
+		_hud.play_sfx("warning")    # 금속 긁힘
+		_sanity_ratio += 0.02
+	_sanity_ratio = clampf(_sanity_ratio, 0.0, 1.0)
+
+# ── 히트스톱: 실시간 짧은 정지 (Doc 31 §2) ──
+func _do_hitstop(duration: float) -> void:
+	if _hitstop_active:
+		return
+	_hitstop_active = true
+	Engine.time_scale = 0.0
+	# 4번째 인자 ignore_time_scale=true → time_scale 0에서도 실시간으로 동작
+	await get_tree().create_timer(duration, true, false, true).timeout
+	Engine.time_scale = 1.0
+	_hitstop_active = false
+
+func _trigger_cam_shake(mag: float, dur: float) -> void:
+	_cam_shake_mag = mag
+	_cam_shake_dur = dur
+	_cam_shake_time = dur
+
+# ── 숨겨진 콤보 (Doc 31 §3) ───────────────────────────────────
+# 처치 등록 → 콤보 누적 후 현재 BO 배수를 반환.
+func _register_combo_kill() -> float:
+	if _combo_count > 0 and _combo_timer <= _combo_window:
+		_combo_count += 1
+	else:
+		_combo_count = 1
+	_combo_timer = 0.0
+	return _combo_multiplier()
+
+# 콤보 단계별 BO 배수: 1→×1, 2→×1.3, 3→×1.6, 4+→×2.0
+func _combo_multiplier() -> float:
+	match _combo_count:
+		0, 1: return 1.0
+		2:    return 1.3
+		3:    return 1.6
+		_:    return 2.0
+
+# 흡수음 음높이: 콤보 단계만큼 상승, 4연속+에서 최고조 고정
+func _combo_pitch() -> float:
+	return 1.0 + clampf(float(_combo_count - 1), 0.0, 3.0) * 0.12
+
+func _reset_combo() -> void:
+	_combo_count = 0
+	_combo_timer = 0.0
+
+# ── 붉은 안개 분출 (Doc 31 §2) ──
+func _spawn_kill_mist(pos: Vector2) -> void:
+	var p := CPUParticles2D.new()
+	p.position = pos
+	p.z_index = 1
+	p.one_shot = true
+	p.explosiveness = 0.9
+	p.amount = 20
+	p.lifetime = 0.35
+	p.direction = Vector2(0, -1)
+	p.spread = 180.0
+	p.initial_velocity_min = 70.0
+	p.initial_velocity_max = 180.0
+	p.gravity = Vector2(0, 240.0)
+	p.damping_min = 40.0
+	p.damping_max = 90.0
+	p.scale_amount_min = 2.0
+	p.scale_amount_max = 5.0
+	p.color = Color(0.72, 0.06, 0.05)
+	var ramp := Gradient.new()
+	ramp.set_color(0, Color(0.85, 0.10, 0.08, 0.9))
+	ramp.set_color(1, Color(0.45, 0.02, 0.02, 0.0))
+	p.color_ramp = ramp
+	add_child(p)
+	p.emitting = true
+	# 수명 종료 후 자동 정리
+	get_tree().create_timer(p.lifetime + 0.2).timeout.connect(p.queue_free)
 
 const LOOT_PROXIMITY_DZ := 5.0  # 폐차 인접 판정 거리
 
@@ -977,6 +1146,9 @@ func _apply_route_modifiers(route_type: String) -> void:
 	_scavenging.SPAWN_CHANCE = p["scavenging"]["chance"]
 	_watchers.SPACING_Z      = p["watcher"]["spacing"]
 	_watchers.SPAWN_CHANCE   = p["watcher"]["chance"]
+	# Doc 31 §9: 스테이지 1만 전투 학습용 도입부 튜닝 적용
+	_watchers.intro_tuning   = (current_stage == 1)
+	_watchers.stage_len      = STAGE_LENGTH
 	_jiwons.SPACING_Z        = p["watcher"]["spacing"]  # 지원도 동일한 간격 체계 사용
 	_jiwons.prepare_spawn(STAGE_LENGTH, _sanity_ratio)
 	var jiwon_info = _jiwons.get_spawned_info()
@@ -1034,7 +1206,8 @@ func _on_item_used(item_id: String) -> void:
 		if _meta != null and _meta.has_perk("cigarette_taste"):
 			amount = 0.30
 			_vehicle.apply_cigarette_buff(10.0)
-		_sanity_ratio = minf(_sanity_ratio + amount, 1.0)
+		_cigarette_recovery_timer = 4.5
+		_cigarette_recovery_amount = amount
 		_hud.spawn_smoke()
 	elif item_id == "patch_kit":
 		# 타이어 수리: 가장 상태가 나쁜 타이어 50% 수복
@@ -1093,7 +1266,14 @@ func _update_backdrops_vertical(delta: float, hill_px: float, instant: bool = fa
 	if _mtn_sprite    != null: _mtn_sprite.position.y    = _mtn_y
 	if _forest_sprite != null: _forest_sprite.position.y = _forest_y
 
+func _input(event: InputEvent) -> void:
+	if _game_state == "splash":
+		if (event is InputEventKey and event.pressed and not event.echo) or (event is InputEventMouseButton and event.pressed):
+			_skip_splash()
+			get_viewport().set_input_as_handled()
+
 func _unhandled_input(event: InputEvent) -> void:
+
 	if event is InputEventKey and event.pressed and not event.echo:
 		match event.keycode:
 			KEY_KP_0:
@@ -1117,6 +1297,9 @@ func _unhandled_input(event: InputEvent) -> void:
 			KEY_KP_ADD:
 				_sanity_ratio = clampf(_sanity_ratio + 0.10, 0.0, 1.0)
 				print("[DEBUG] 디버그 치트: 정신력 +10% 증가 (현재: ", int(_sanity_ratio * 100.0), "%)")
+			KEY_KP_4:
+				_on_item_used("cigarette")
+				print("[DEBUG] 디버그 치트: 담배 사용 (연기 파티클 재생 및 정신력 회복)")
 			KEY_KP_SUBTRACT:
 				_sanity_ratio = clampf(_sanity_ratio - 0.10, 0.0, 1.0)
 				print("[DEBUG] 디버그 치트: 정신력 -10% 감소 (현재: ", int(_sanity_ratio * 100.0), "%)")
@@ -1231,6 +1414,8 @@ func _reset_game() -> void:
 	_monster_distance = 350.0
 	_stages_cleared_this_run = 0
 	_sanity_ratio = 1.0
+	_cigarette_recovery_timer = 0.0
+	_cigarette_recovery_amount = 0.0
 	_state_timer = 0.0
 	_exit_cam_tilt = 0.0
 	_jumper_on_hood = false
@@ -1336,3 +1521,137 @@ func _load_all_assets() -> void:
 	await get_tree().process_frame
 	
 	_assets_loaded = true
+
+# ── 스플래시 화면 시퀀스 ──────────────────────────────────────────
+func _start_splash_sequence() -> void:
+	_game_state = "splash"
+	_current_splash_index = 0
+	
+	_splash_layer = CanvasLayer.new()
+	_splash_layer.layer = 100 # 다른 모든 UI 레이어보다 위에 배치
+	add_child(_splash_layer)
+	
+	var bg := ColorRect.new()
+	bg.color = Color.BLACK
+	bg.set_anchors_preset(Control.PRESET_FULL_RECT)
+	bg.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_splash_layer.add_child(bg)
+	
+	var font_neo := load("res://Font/NeoDunggeunmoPro-Regular.ttf") as Font
+	
+	# 1. 엔진 스플래시 컨테이너
+	_godot_container = Control.new()
+	_godot_container.set_anchors_preset(Control.PRESET_FULL_RECT)
+	_godot_container.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_godot_container.modulate.a = 0.0
+	_splash_layer.add_child(_godot_container)
+	
+	# "MADE WITH" 라벨
+	var godot_label := Label.new()
+	godot_label.text = "MADE WITH"
+	godot_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	godot_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	godot_label.add_theme_font_override("font", font_neo)
+	godot_label.add_theme_font_size_override("font_size", 24)
+	godot_label.add_theme_color_override("font_color", Color(0.7, 0.7, 0.7))
+	godot_label.size = Vector2(1280, 50)
+	godot_label.position = Vector2(0, 200)
+	godot_label.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_godot_container.add_child(godot_label)
+	
+	# Godot 로고
+	var godot_logo := TextureRect.new()
+	godot_logo.texture = load("res://icon.svg") as Texture2D
+	godot_logo.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
+	godot_logo.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
+	godot_logo.size = Vector2(160, 160)
+	godot_logo.position = Vector2(1280 / 2 - 80, 270)
+	godot_logo.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_godot_container.add_child(godot_logo)
+	
+	# "GODOT ENGINE" 라벨
+	var godot_name_label := Label.new()
+	godot_name_label.text = "GODOT ENGINE"
+	godot_name_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	godot_name_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	godot_name_label.add_theme_font_override("font", font_neo)
+	godot_name_label.add_theme_font_size_override("font_size", 32)
+	godot_name_label.add_theme_color_override("font_color", Color(0.28, 0.55, 0.85))
+	godot_name_label.size = Vector2(1280, 50)
+	godot_name_label.position = Vector2(0, 460)
+	godot_name_label.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_godot_container.add_child(godot_name_label)
+	
+	# 2. TPC 스플래시 컨테이너
+	_tpc_container = Control.new()
+	_tpc_container.set_anchors_preset(Control.PRESET_FULL_RECT)
+	_tpc_container.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_tpc_container.modulate.a = 0.0
+	_tpc_container.visible = false
+	_splash_layer.add_child(_tpc_container)
+	
+	var tpc_tex := load("res://Asset/Image/TPC.png") as Texture2D
+	if tpc_tex != null:
+		var tpc_logo := TextureRect.new()
+		tpc_logo.texture = tpc_tex
+		tpc_logo.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
+		tpc_logo.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
+		tpc_logo.size = Vector2(1280, 720)
+		tpc_logo.position = Vector2.ZERO
+		tpc_logo.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		_tpc_container.add_child(tpc_logo)
+	
+	# 첫 번째 스플래시 단계 실행
+	_play_splash_step(0)
+
+func _play_splash_step(index: int) -> void:
+	_current_splash_index = index
+	
+	if _splash_tween != null and _splash_tween.is_valid():
+		_splash_tween.kill()
+		
+	if index == 0:
+		if _godot_container != null:
+			_godot_container.visible = true
+			_godot_container.modulate.a = 0.0
+		if _tpc_container != null:
+			_tpc_container.visible = false
+			
+		_splash_tween = create_tween()
+		_splash_tween.tween_property(_godot_container, "modulate:a", 1.0, 1.2)
+		_splash_tween.tween_interval(1.5)
+		_splash_tween.tween_property(_godot_container, "modulate:a", 0.0, 1.0)
+		_splash_tween.tween_callback(func():
+			_play_splash_step(1)
+		)
+	elif index == 1:
+		if _godot_container != null:
+			_godot_container.visible = false
+		if _tpc_container != null:
+			_tpc_container.visible = true
+			_tpc_container.modulate.a = 0.0
+			
+		_splash_tween = create_tween()
+		_splash_tween.tween_property(_tpc_container, "modulate:a", 1.0, 1.2)
+		_splash_tween.tween_interval(2.0)
+		_splash_tween.tween_property(_tpc_container, "modulate:a", 0.0, 1.0)
+		_splash_tween.tween_callback(func():
+			_play_splash_step(2)
+		)
+	else:
+		_end_splash_sequence()
+
+func _skip_splash() -> void:
+	# 클릭 또는 키 입력 한 번당 스플래시 하나씩만 스킵
+	if _current_splash_index == 0:
+		_play_splash_step(1)
+	else:
+		_play_splash_step(2)
+
+func _end_splash_sequence() -> void:
+	if _splash_tween != null and _splash_tween.is_valid():
+		_splash_tween.kill()
+	if _splash_layer != null:
+		_splash_layer.queue_free()
+		_splash_layer = null
+	_show_main_menu()

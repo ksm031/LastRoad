@@ -8,6 +8,13 @@ const BillboardManager = preload("res://scripts/billboard_manager.gd")
 var SPACING_Z      := 35.0    # 실제값은 spawn_config.gd에서 주입
 var SPAWN_CHANCE   := 0.42
 var seed_offset    := 0       # 스테이지마다 다른 배치를 위한 시드 오프셋
+
+# ── Doc 31 §9: 스테이지 1 전투 학습 튜닝 ───────────────────────
+# intro_tuning이 켜지면 첫 와쳐를 정중앙에 고정 배치하고(첫 사냥감),
+# 도입부는 비우고 거리에 따라 스폰 확률을 점증시킨다.
+var intro_tuning   := false
+var stage_len      := 600.0   # 스폰 확률 램프 기준 거리 (game_world에서 주입)
+const FIRST_WATCHER_K := 2     # 첫 와쳐가 등장할 결정적 인덱스 (wz ≈ 90~100)
 const VISIBLE_DZ_MIN := 0.38
 const VISIBLE_DZ_MAX := 85.0
 const WZ_BASE_OFFSET := 20.0   # _watcher_at_k: k*SPACING_Z + 20 + jitter
@@ -88,23 +95,27 @@ func update_state(p_scroll_z: float, p_lane_x: float, p_curve_x: PackedFloat32Ar
 
 const OBJECT_WIDTH     := 0.9     # 와쳐 자체 너비
 
-func check_collision(vehicle: LastRoadVehicle) -> bool:
+# Doc 31 §6: max_hits만큼 동시 충돌을 등록 (범퍼 Lv3 관통).
+# 반환: 이번 프레임 새 충돌 목록 [{ k, is_hallucination }]
+func check_collision(vehicle: LastRoadVehicle, max_hits: int = 1) -> Array:
 	_prune_hits()
+	var hits: Array = []
 	if _texture == null:
-		return false
-	
-	var hit := false
+		return hits
+
 	var k0 := int(floor(scroll_z / SPACING_Z)) - 1
 	var k1 := k0 + 4
-	
+
 	# 통합 충돌 범위 계산: (차폭 + 오브젝트폭) / 2
 	var threshold := (vehicle.COLLISION_WIDTH + OBJECT_WIDTH) * 0.5
-	
+
 	for k in range(k0, k1 + 1):
+		if hits.size() >= max_hits:
+			break
 		var o := _watcher_at_k(k)
 		if o.is_empty():
 			continue
-		
+
 		if abs(float(o["lane"]) - vehicle.cam_x) > threshold:
 			continue
 		var wz := float(o["wz"])
@@ -113,17 +124,17 @@ func check_collision(vehicle: LastRoadVehicle) -> bool:
 			continue
 		if _is_hit_active(k):
 			continue
-		
+
+		var is_hal := bool(o.get("is_hallucination", false))
 		_hit_info[k] = {
 			"until_z": wz + HIT_COOLDOWN_Z,
 			"hit_time": _anim_time,
-			"is_hallucination": bool(o.get("is_hallucination", false))
+			"is_hallucination": is_hal
 		}
-		
-		# 충돌 효과는 game_world.gd에서 처리 (apply_watcher_hit + 정신력 감소)
-		hit = true
-		break
-	return hit
+
+		# 충돌 효과는 game_world.gd에서 처리 (속도 임계 처치 + 정신력)
+		hits.append({ "k": k, "is_hallucination": is_hal })
+	return hits
 
 func is_hit_hallucination(k: int) -> bool:
 	if not _hit_info.has(k): return false
@@ -145,12 +156,30 @@ func _prune_hits() -> void:
 
 # ── 결정적 와쳐 생성 ────────────────────────────────────────
 func _watcher_at_k(k: int) -> Dictionary:
+	var wz := float(k) * SPACING_Z + 20.0 + BillboardManager.get_rand01(k * 13331 + 101, seed_offset) * 10.0
+
+	# Doc 31 §9: 스테이지 1 도입부 — 첫 와쳐를 첫 사냥감으로 연출
+	if intro_tuning:
+		# 첫 와쳐 이전 구간은 비워 깨끗한 가속 직선 확보
+		if k < FIRST_WATCHER_K:
+			return {}
+		# 첫 와쳐: 시드 무관하게 항상 정중앙 고정 스폰
+		if k == FIRST_WATCHER_K:
+			return { "k": k, "lane": 0, "wz": wz, "is_hallucination": false }
+		# 첫 와쳐 직후 한 칸은 학습 텀으로 비움
+		if k == FIRST_WATCHER_K + 1:
+			return {}
+
 	var r := BillboardManager.get_rand01(k * 13331 + 7, seed_offset)
-	if r > SPAWN_CHANCE:
+	var eff_chance := SPAWN_CHANCE
+	if intro_tuning:
+		# 도입부 낮게 → 후반 점증 (거리 비례 0.35x ~ 1.2x)
+		var prog := clampf(wz / stage_len, 0.0, 1.0)
+		eff_chance = SPAWN_CHANCE * lerpf(0.35, 1.2, prog)
+	if r > eff_chance:
 		return {}
 	var lane := int(floor(BillboardManager.get_rand01(k * 13331 + 53, seed_offset) * 3.0)) - 1
-	var wz := float(k) * SPACING_Z + 20.0 + BillboardManager.get_rand01(k * 13331 + 101, seed_offset) * 10.0
-	
+
 	# 정신력이 낮을수록 환영 와쳐가 섞여 나옴
 	var is_hallucination := false
 	if _current_sanity_ratio < 0.4:

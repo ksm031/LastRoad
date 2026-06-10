@@ -8,7 +8,8 @@
       "Bash(grep:*)",
       "Bash(find:*)",
       "Bash(python3:*)",
-      "Bash(ls:*)"
+      "Bash(ls:*)",
+      "PowerShell($g = Get-Command godot -ErrorAction SilentlyContinue; if \\($g\\) { $g.Source } else { \"godot not on PATH\" })"
     ]
   }
 }

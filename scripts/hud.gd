@@ -43,6 +43,7 @@ var _spd_pivot    : Node2D
 var _rpm_pivot    : Node2D
 var _fuel_pivot   : Node2D
 var _fuel_warning_light: Sprite2D
+var _seatbelt_warning_light: Sprite2D
 var _hud_spd      : Label
 var _hud_wealth   : Label
 var _engine_light  : Sprite2D
@@ -53,6 +54,7 @@ var _min_tire_dur  : float = 100.0
 var _sfx_impact  : AudioStreamPlayer
 var _sfx_repair  : AudioStreamPlayer
 var _sfx_warning : AudioStreamPlayer
+var _sfx_pickup  : AudioStreamPlayer  # BO 흡수 '띵' (Doc 31 §2)
 
 # ── 저연료 및 괴물 추격 시각 효과 ──────────────────────────────────
 var _low_fuel_overlay : ColorRect
@@ -90,6 +92,9 @@ var _blink_timer: float = 0.0
 var _blink_state: int = 0
 var _next_blink_time: float = 0.0
 
+var _cig_node : CigaretteGlow = null
+var _cig_active_timer : float = 0.0
+
 # ── 게임오버 / 스테이지 클리어 UI ───────────────────────────────
 var _gameover_overlay : ColorRect
 var _center_label     : Label
@@ -100,14 +105,21 @@ var _subtitle_timer : float = 0.0
 
 # ── 점퍼 보닛 오버레이 ────────────────────────────────────────
 var _jumper_hood_overlay : Sprite2D
-var _smoke_textures      : Array[Texture2D] = []
-var _smoke_spawn_timer   : float = 0.0
-var _smoke_spawn_left    : int   = 0
+var _smoke_gpu1          : GPUParticles2D = null
+var _smoke_gpu2          : GPUParticles2D = null
+var _smoke_gpu3          : GPUParticles2D = null
+var _smoke_gpu_timer     : float = 0.0
+var _cig_hud_sprite      : Sprite2D = null
+var _cig_hud_fire        : Sprite2D = null
+var _cig_hud_glow        : Sprite2D = null
+const CIG_FILTER_OFFSET  := Vector2(-36.0, 68.0)
+const CIG_TIP_OFFSET     := Vector2(19.0, -21.0)
 var _escape_gauge_bg     : ColorRect
 var _escape_gauge_fill   : ColorRect
 const ESCAPE_GAUGE_W     := 300.0
 const ESCAPE_GAUGE_H     := 10.0
 var _wheel_shake_icon    : Sprite2D
+var _escape_hint_label   : Label    # Doc 31 §4: "가속하여 탈출" 힌트
 
 ## 진동 트리거 — 외부(game_world) 및 내부 모두 이 함수만 사용
 func trigger_shake(type: String) -> void:
@@ -177,6 +189,7 @@ func _ready() -> void:
 	_sfx_impact = AudioStreamPlayer.new(); add_child(_sfx_impact)
 	_sfx_repair = AudioStreamPlayer.new(); add_child(_sfx_repair)
 	_sfx_warning = AudioStreamPlayer.new(); add_child(_sfx_warning)
+	_sfx_pickup = AudioStreamPlayer.new(); add_child(_sfx_pickup)
 	
 	_build_jumper_overlay()  # dashboard보다 먼저 추가 → 대시보드 뒤에 렌더
 	_build_dashboard()
@@ -196,27 +209,178 @@ func _ready() -> void:
 	_build_charm_ui()
 	update_radio_for_stage(1, 600.0)  # 스테이지 1 기본 초기화
 	_setup_cursor()
-	_load_smoke_textures()
+	_setup_gpu_smoke()
 	set_process(true)
 
-func _load_smoke_textures() -> void:
-	_smoke_textures.clear()
-	for i in range(1, 19): # 01 ~ 18
-		var path := "res://Asset/Image/Particle/smoke_%02d.png" % i
-		if ResourceLoader.exists(path):
-			_smoke_textures.append(load(path))
+func _setup_gpu_smoke() -> void:
+	var script_res = load("res://scripts/smoke_particles_setup.gd")
+	if not script_res: return
+
+	# ── 첫 번째 연기 줄기 (왼쪽으로 분기, 상승 속도 36.0, 입자 85개) ──
+	_smoke_gpu1 = GPUParticles2D.new()
+	_smoke_gpu1.position = Vector2(300.0, 600.0)
+	_smoke_gpu1.emitting = false
+	_smoke_gpu1.set_script(script_res)
+	_smoke_gpu1.visual_style = "Smooth/HD"
+	_smoke_gpu1.trajectory_offset = 0.0
+	_smoke_gpu1.rise_speed_override = 36.0
+	_smoke_gpu1.sway_amplitude_override = 38.0
+	_smoke_gpu1.amount_override = 85
+	_smoke_gpu1.lifetime_override = 5.5
+	_smoke_gpu1.branch_direction = -1.0
+	add_child(_smoke_gpu1)
+
+	# ── 두 번째 연기 줄기 (오른쪽으로 분기, 상승 속도 29.0, 입자 80개) ──
+	_smoke_gpu2 = GPUParticles2D.new()
+	_smoke_gpu2.position = Vector2(300.0, 600.0)
+	_smoke_gpu2.emitting = false
+	_smoke_gpu2.set_script(script_res)
+	_smoke_gpu2.visual_style = "Smooth/HD"
+	_smoke_gpu2.trajectory_offset = 4.2
+	_smoke_gpu2.rise_speed_override = 29.0
+	_smoke_gpu2.sway_amplitude_override = 34.0
+	_smoke_gpu2.amount_override = 80
+	_smoke_gpu2.lifetime_override = 5.5
+	_smoke_gpu2.branch_direction = 1.0
+	add_child(_smoke_gpu2)
+
+	# ── 세 번째 연기 줄기 (중앙 유지, 상승 속도 33.0, 입자 75개) ──
+	_smoke_gpu3 = GPUParticles2D.new()
+	_smoke_gpu3.position = Vector2(300.0, 600.0)
+	_smoke_gpu3.emitting = false
+	_smoke_gpu3.set_script(script_res)
+	_smoke_gpu3.visual_style = "Smooth/HD"
+	_smoke_gpu3.trajectory_offset = 1.8
+	_smoke_gpu3.rise_speed_override = 33.0
+	_smoke_gpu3.sway_amplitude_override = 28.0
+	_smoke_gpu3.amount_override = 75
+	_smoke_gpu3.lifetime_override = 5.5
+	_smoke_gpu3.branch_direction = 0.0
+	add_child(_smoke_gpu3)
+
+	# ── HUD 담배 및 담뱃불 스프라이트 생성 ──
+	_cig_hud_sprite = Sprite2D.new()
+	var tex_cig = load("res://Asset/Image/cigarette.png") as Texture2D
+	if tex_cig:
+		_cig_hud_sprite.texture = tex_cig
+		_cig_hud_sprite.centered = true
+		_cig_hud_sprite.position = Vector2(280.0, 657.0)
+		_cig_hud_sprite.visible = false
+		
+		# 대각선 버닝 셰이더 생성 및 대입
+		var sh_mat = ShaderMaterial.new()
+		var sh = Shader.new()
+		sh.code = """shader_type canvas_item;
+uniform float burn_progress : hint_range(0.0, 1.0) = 1.0;
+void fragment() {
+	vec4 color = texture(TEXTURE, UV);
+	float progress_coord = (UV.x + (1.0 - UV.y)) * 0.5;
+	float cutoff = mix(0.03, 0.62, burn_progress);
+	if (progress_coord > cutoff) {
+		discard;
+	}
+	COLOR = color;
+}"""
+		sh_mat.shader = sh
+		_cig_hud_sprite.material = sh_mat
+	add_child(_cig_hud_sprite)
+
+	# ── 담뱃불 발광(Glow) 레이어 (Additive Blend) ──
+	_cig_hud_glow = Sprite2D.new()
+	# 반투명 주황색 원 텍스처 생성 (64x64, 중심에서 가장자리로 페이드)
+	var glow_size := 64
+	var glow_img := Image.create(glow_size, glow_size, false, Image.FORMAT_RGBA8)
+	var center := Vector2(glow_size * 0.5, glow_size * 0.5)
+	var max_r := glow_size * 0.5
+	for y in range(glow_size):
+		for x in range(glow_size):
+			var dist := Vector2(x + 0.5, y + 0.5).distance_to(center)
+			var t := clampf(dist / max_r, 0.0, 1.0)
+			var a := (1.0 - t * t) * 0.7  # 부드러운 감쇠
+			if a < 0.01:
+				a = 0.0
+			glow_img.set_pixel(x, y, Color(1.0, 0.55, 0.1, a))
+	var glow_tex := ImageTexture.create_from_image(glow_img)
+	_cig_hud_glow.texture = glow_tex
+	_cig_hud_glow.centered = true
+	_cig_hud_glow.scale = Vector2(1.5, 1.5)
+	_cig_hud_glow.modulate = Color(1.0, 0.7, 0.2, 0.5)
+	var glow_mat := CanvasItemMaterial.new()
+	glow_mat.blend_mode = CanvasItemMaterial.BLEND_MODE_ADD
+	_cig_hud_glow.material = glow_mat
+	_cig_hud_glow.visible = false
+	add_child(_cig_hud_glow)
+
+	_cig_hud_fire = Sprite2D.new()
+	var tex_fire = load("res://Asset/Image/cigarette_fire.png") as Texture2D
+	if tex_fire:
+		_cig_hud_fire.texture = tex_fire
+		_cig_hud_fire.centered = true
+		_cig_hud_fire.visible = false
+		
+		# 엠버(달아오르는 픽셀) 셰이더
+		var ember_mat = ShaderMaterial.new()
+		var ember_sh = Shader.new()
+		ember_sh.code = """shader_type canvas_item;
+
+float hash(vec2 p) {
+	return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453);
+}
+
+void fragment() {
+	vec4 color = texture(TEXTURE, UV);
+	if (color.a < 0.1) { discard; }
+
+	// 8x8 셀 그리드로 "픽셀 덩어리" 생성
+	vec2 cell = floor(UV * 8.0);
+	float t = TIME * 1.5;
+
+	// 시간에 따라 변하는 노이즈 — 달아오르는 셀 선택
+	float n1 = hash(cell + floor(t * 0.7));
+	float n2 = hash(cell + floor(t * 0.4 + 5.0));
+
+	// ~30% 셀이 붉게 달아오름
+	if (n1 < 0.30) {
+		float pulse = 0.6 + 0.4 * sin(t * 2.5 + n1 * 20.0);
+		vec3 ember = vec3(1.0, 0.15, 0.0) * pulse;
+		color.rgb = mix(color.rgb, ember, 0.55);
+	}
+	// 추가 ~15% 셀은 오렌지빛으로 은은하게
+	else if (n2 < 0.15) {
+		float pulse = 0.5 + 0.5 * sin(t * 1.8 + n2 * 15.0);
+		vec3 warm = vec3(1.0, 0.45, 0.05) * pulse;
+		color.rgb = mix(color.rgb, warm, 0.35);
+	}
+
+	COLOR = color;
+}"""
+		ember_mat.shader = ember_sh
+		_cig_hud_fire.material = ember_mat
+	add_child(_cig_hud_fire)
 
 func spawn_smoke() -> void:
-	# 한 번 사용 시 여러 개의 파티클을 시간차를 두고 생성
-	_smoke_spawn_left = 8 # 총 8개의 연기 덩어리
-	_smoke_spawn_timer = 0.0
-
-func _actual_spawn_single_smoke() -> void:
-	if _smoke_textures.is_empty(): return
-	var start_pos := Vector2(300.0, 720.0)
-	start_pos.x += randf_range(-15.0, 15.0) # 퍼짐 정도
-	var p := SmokeParticle.new(_smoke_textures, start_pos)
-	add_child(p)
+	# GPU 파티클 방출 시작
+	if _smoke_gpu1 != null:
+		_smoke_gpu1.emitting = true
+	if _smoke_gpu2 != null:
+		_smoke_gpu2.emitting = true
+	if _smoke_gpu3 != null:
+		_smoke_gpu3.emitting = true
+	_smoke_gpu_timer = 4.5  # 4.5초 동안 연기 방출 작동
+	
+	# HUD 담배 및 불꽃 활성화
+	if _cig_hud_sprite != null:
+		_cig_hud_sprite.visible = true
+	if _cig_hud_fire != null:
+		_cig_hud_fire.visible = true
+	if _cig_hud_glow != null:
+		_cig_hud_glow.visible = true
+	_update_hud_cigarette(1.0)
+	
+	_cig_active_timer = 5.5  # 5.5초 동안 담배 불빛 깜빡임 유지
+	if _cig_node != null:
+		_cig_node.visible = true
+		_cig_node.puff_intensity = 1.0  # 첫 사용 시 강하게 흡입 연출
 
 func _setup_cursor() -> void:
 	# 두께 2px 흰색 속빈 원 커서
@@ -450,13 +614,27 @@ func _process(delta: float) -> void:
 		var ease_dash := smoothstep(0.0, 1.0, _dash_focus_t)
 		_wheel.modulate.a = 1.0 - ease_dash
 
-	# 연기 파티클 지속 생성 로직
-	if _smoke_spawn_left > 0:
-		_smoke_spawn_timer -= delta
-		if _smoke_spawn_timer <= 0.0:
-			_smoke_spawn_timer = randf_range(0.2, 0.4) # 다음 연기까지 간격
-			_smoke_spawn_left -= 1
-			_actual_spawn_single_smoke()
+	# GPU 연기 파티클 지속 시간 관리 및 방출 정지
+	if _smoke_gpu_timer > 0.0:
+		_smoke_gpu_timer -= delta
+		var progress := clampf(_smoke_gpu_timer / 4.5, 0.0, 1.0)
+		_update_hud_cigarette(progress)
+		if _smoke_gpu_timer <= 0.0:
+			_hide_hud_cigarette()
+
+	# 담배 연출 타이머 관리 및 불빛 감쇄
+	if _cig_active_timer > 0.0:
+		_cig_active_timer -= delta
+		if _cig_active_timer <= 0.0:
+			if _cig_node != null:
+				_cig_node.visible = false
+		else:
+			# 연기를 방출하는 동안 무작위로 흡입(Puff) 플레어 연출
+			var is_emitting := (_smoke_gpu1 != null and _smoke_gpu1.emitting) or (_smoke_gpu2 != null and _smoke_gpu2.emitting) or (_smoke_gpu3 != null and _smoke_gpu3.emitting)
+			if is_emitting:
+				if randf() < delta * 2.0: # 약 0.5초 주기로 불꽃 번뜩임
+					if _cig_node != null:
+						_cig_node.puff_intensity = randf_range(0.7, 1.2)
 
 	if _jumper_hood_overlay != null and _jumper_hood_overlay.visible:
 		if _jumper_crushed:
@@ -555,6 +733,14 @@ func _update_dashboard_details(delta: float) -> void:
 			_fuel_warning_light.visible = true
 		else:
 			_fuel_warning_light.visible = false
+
+	# 안전벨트 경고등 깜빡임 (정신력 50% 이하 = 환영 발동)
+	if _seatbelt_warning_light != null:
+		if _sanity_ratio <= 0.50:
+			_seatbelt_warning_light.modulate.a = 0.6 + 0.4 * sin(_warning_blink_time * 0.7 + 1.5)
+			_seatbelt_warning_light.visible = true
+		else:
+			_seatbelt_warning_light.visible = false
 			
 	# 2. 라디오 액정 야간 발광(Glow) 효과
 	if _radio_lcd_glow != null:
@@ -579,18 +765,43 @@ func on_watcher_hit() -> void:
 	play_sfx("impact")
 
 ## 효과음 재생 (GDD: 타격감 개선용)
-func play_sfx(type: String) -> void:
+## pitch: 콤보 단계에 따른 음높이 (Doc 31 §3, 기본 1.0)
+func play_sfx(type: String, pitch: float = 1.0) -> void:
 	var player : AudioStreamPlayer = null
 	match type:
 		"impact": player = _sfx_impact
 		"repair": player = _sfx_repair
 		"warning": player = _sfx_warning
-	
+		"pickup": player = _sfx_pickup
+
 	if player and not player.playing:
 		# TODO: 실제 사운드 파일 경로 할당 필요
 		# var sfx = load("res://Asset/Sound/" + type + ".wav")
 		# if sfx: player.stream = sfx
+		player.pitch_scale = pitch
 		player.play()
+
+## 처치 BO 획득 팝업 (+N) — BO 카운터 옆에서 떠오르며 사라짐 (Doc 31 §2)
+func popup_bo(amount: int) -> void:
+	if amount <= 0:
+		return
+	var lbl := Label.new()
+	var font_neo := load("res://Font/NeoDunggeunmoPro-Regular.ttf") as Font
+	if font_neo: lbl.add_theme_font_override("font", font_neo)
+	lbl.text = "+%d BO" % amount
+	lbl.add_theme_font_size_override("font_size", 26)
+	lbl.add_theme_color_override("font_color", Color(0.95, 0.25, 0.22))
+	lbl.position = Vector2(1010, 52)  # BO 카운터(_hud_wealth) 바로 아래
+	lbl.size = Vector2(242, 32)
+	lbl.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
+	lbl.z_index = 20
+	add_child(lbl)
+	var tw := lbl.create_tween()
+	tw.set_parallel(true)
+	tw.tween_property(lbl, "position:y", lbl.position.y - 26.0, 0.7)
+	tw.tween_property(lbl, "modulate:a", 0.0, 0.7).set_ease(Tween.EASE_IN)
+	tw.set_parallel(false)
+	tw.tween_callback(lbl.queue_free)
 
 func _build_portrait_and_mirror() -> void:
 	_mirror_clip = Control.new()
@@ -621,6 +832,12 @@ func _build_portrait_and_mirror() -> void:
 		_portrait.position = PORTRAIT_BASE - MIRROR_MIN
 		_portrait.modulate = Color(0.78, 0.83, 0.90)
 	_mirror_clip.add_child(_portrait)
+	
+	# 담배 노드 생성 및 초상화 자식으로 추가
+	_cig_node = CigaretteGlow.new()
+	_cig_node.position = Vector2(145.0, 300.0) # 입 좌표
+	_cig_node.visible = false
+	_portrait.add_child(_cig_node)
 	
 	_next_blink_time = randf_range(2.0, 4.0)
 
@@ -930,6 +1147,16 @@ func _build_fuel_needle() -> void:
 	_fuel_warning_light.visible = false
 	add_child(_fuel_warning_light)
 
+	# 안전벨트 경고등 (환영 단계 >= 1, 정신력 <= 50%)
+	_seatbelt_warning_light = Sprite2D.new()
+	var tex_sb := load("res://Asset/Image/seatbelt_icon.png")
+	if tex_sb:
+		_seatbelt_warning_light.texture = tex_sb
+		_seatbelt_warning_light.scale = Vector2(0.20, 0.20)
+	_seatbelt_warning_light.modulate = Color(1.0, 0.6, 0.1, 1.0) # 주황색 틴트
+	_seatbelt_warning_light.visible = false
+	add_child(_seatbelt_warning_light)
+
 func _make_needle_pivot(center: Vector2, tex_path: String, sc: float) -> Node2D:
 	var pivot := Node2D.new()
 	pivot.position = center
@@ -1193,13 +1420,26 @@ func _build_jumper_overlay() -> void:
 	_escape_gauge_fill.visible = false
 	add_child(_escape_gauge_fill)
 
-	# 핸들 흔들기 안내 아이콘
+	# 핸들 흔들기 안내 아이콘 (Doc 31 §4: 속도 기반 탈출로 변경되어 더 이상 표시하지 않음)
 	_wheel_shake_icon = Sprite2D.new()
 	_wheel_shake_icon.texture = load("res://Asset/Image/wheel_icon.png")
 	_wheel_shake_icon.position = Vector2(640.0, 275.0) # 게이지 위쪽
 	_wheel_shake_icon.scale = Vector2(0.8, 0.8)
 	_wheel_shake_icon.visible = false
 	add_child(_wheel_shake_icon)
+
+	# Doc 31 §4: 가속 탈출 힌트
+	_escape_hint_label = Label.new()
+	var font_neo := load("res://Font/NeoDunggeunmoPro-Regular.ttf") as Font
+	if font_neo: _escape_hint_label.add_theme_font_override("font", font_neo)
+	_escape_hint_label.text = "▲ 가속하여 떨쳐내라"
+	_escape_hint_label.add_theme_font_size_override("font_size", 20)
+	_escape_hint_label.add_theme_color_override("font_color", CrtTheme.AMBER)
+	_escape_hint_label.size = Vector2(ESCAPE_GAUGE_W, 28)
+	_escape_hint_label.position = Vector2(640.0 - ESCAPE_GAUGE_W * 0.5, 278.0)
+	_escape_hint_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	_escape_hint_label.visible = false
+	add_child(_escape_hint_label)
 
 var _jumper_target_sway : float = 0.0
 var _jumper_current_sway : float = 0.0
@@ -1240,8 +1480,11 @@ func set_jumper_on_hood(on: bool, drop_left: bool = false) -> void:
 	if not on and _escape_gauge_fill:
 		_escape_gauge_fill.size.x = 0.0
 	
+	# Doc 31 §4: 휠 아이콘 대신 가속 힌트 표시
 	if _wheel_shake_icon:
-		_wheel_shake_icon.visible = on
+		_wheel_shake_icon.visible = false
+	if _escape_hint_label:
+		_escape_hint_label.visible = on
 
 
 
@@ -1611,6 +1854,12 @@ func _update_shake(speed: float, scroll_z: float, steering_angle: float) -> void
 			icon_size = _fuel_warning_light.texture.get_size() * _fuel_warning_light.scale
 		# 연료 게이지 바늘 중심 아래 약간 왼쪽에 배치
 		_fuel_warning_light.position = FUEL_GAUGE_CENTER + offset + Vector2(-6.0, 30.0) - icon_size * 0.5
+	if _seatbelt_warning_light != null:
+		var sb_icon_size = Vector2.ZERO
+		if _seatbelt_warning_light.texture:
+			sb_icon_size = _seatbelt_warning_light.texture.get_size() * _seatbelt_warning_light.scale
+		# 연료 경고등 오른쪽에 배치
+		_seatbelt_warning_light.position = FUEL_GAUGE_CENTER + offset + Vector2(18.0, 30.0) - sb_icon_size * 0.5
 	if _mirror_clip != null:
 		_mirror_clip.position = MIRROR_MIN
 
@@ -1792,3 +2041,78 @@ func _show_charm_swap_ui(new_charm_id: String) -> void:
 		vbox.add_child(btn)
 		vbox.add_child(desc)
 		hbox.add_child(vbox)
+
+
+# ── 룸미러 포트레이트 담배 및 깜빡이는 불꽃 효과 ──
+class CigaretteGlow extends Node2D:
+	var puff_intensity: float = 0.0
+
+	func _process(delta: float) -> void:
+		puff_intensity = maxf(puff_intensity - delta * 2.5, 0.0)
+		queue_redraw()
+
+	func _draw() -> void:
+		# Mouth (0, 0)에서 시작해 좌측 하단(-18, 9) 방향으로 뻗는 담배 개비
+		# 1. 담배 본체 (흰색 필터/바디)
+		draw_line(Vector2(0, 0), Vector2(-18, 9), Color(0.95, 0.95, 0.95), 3.0)
+		# 2. 입술 근처의 오렌지빛 필터 부분
+		draw_line(Vector2(0, 0), Vector2(-5, 2.5), Color(0.82, 0.48, 0.18), 3.0)
+
+		# ── 부드러운 발광 효과 ──
+		var t := Time.get_ticks_msec() * 0.003
+		var glow := 0.7 + 0.3 * sin(t) # 부드러운 맥동 (0.4~1.0)
+		var intensity := glow * (1.0 + puff_intensity * 1.6)
+
+		# A. 외부 발광 아우라 (넓고 은은한 오렌지빛)
+		var outer_r := 10.0 * (1.0 + puff_intensity * 1.0)
+		draw_circle(Vector2(-19, 9.5), outer_r, Color(1.0, 0.35, 0.0, intensity * 0.2))
+
+		# B. 중간 발광 (따뜻한 오렌지)
+		var mid_r := 5.0 * (1.0 + puff_intensity * 0.7)
+		draw_circle(Vector2(-19, 9.5), mid_r, Color(1.0, 0.5, 0.05, intensity * 0.55))
+
+		# C. 불꽃 중심핵 (밝은 황백색)
+		var core_r := 2.0 * (1.0 + puff_intensity * 0.4)
+		draw_circle(Vector2(-19, 9.5), core_r, Color(1.0, 0.92, 0.5, intensity))
+
+
+func _update_hud_cigarette(progress: float) -> void:
+	if _cig_hud_sprite == null or _cig_hud_fire == null: return
+	
+	# 셰이더 매개변수 적용 (대각선 컷오프 작동)
+	var mat = _cig_hud_sprite.material as ShaderMaterial
+	if mat:
+		mat.set_shader_parameter("burn_progress", progress)
+	
+	# 현재 타들어가는 끝단(Fire) 좌표 선형 보간
+	var start_pos = _cig_hud_sprite.position + CIG_FILTER_OFFSET
+	var end_pos = _cig_hud_sprite.position + CIG_TIP_OFFSET
+	var current_pos = start_pos.lerp(end_pos, progress)
+	# 경로 각도 미세 보정 — 끝(progress→0)에 갈수록 왼쪽으로 3px 보정
+	current_pos.x -= (1.0 - progress) * 3.0
+	
+	_cig_hud_fire.position = current_pos
+	
+	_cig_hud_fire.scale = Vector2.ONE
+	
+	# 발광 레이어 동기화
+	if _cig_hud_glow != null:
+		_cig_hud_glow.position = current_pos
+		var t := Time.get_ticks_msec() * 0.004
+		var glow_pulse := 2.5 + 0.5 * sin(t * 0.8 + 1.0)
+		_cig_hud_glow.scale = Vector2(glow_pulse, glow_pulse)
+		var glow_a := 0.35 + 0.15 * sin(t * 0.6)
+		_cig_hud_glow.modulate = Color(1.0, 0.6, 0.15, glow_a)
+	
+	# 연기 방출(GPU 파티클) 노드들의 생성 오리진을 실시간으로 이동하는 불꽃 끝으로 변경
+	if _smoke_gpu1 != null: _smoke_gpu1.position = current_pos
+	if _smoke_gpu2 != null: _smoke_gpu2.position = current_pos
+	if _smoke_gpu3 != null: _smoke_gpu3.position = current_pos
+
+func _hide_hud_cigarette() -> void:
+	if _cig_hud_sprite != null: _cig_hud_sprite.visible = false
+	if _cig_hud_fire != null: _cig_hud_fire.visible = false
+	if _cig_hud_glow != null: _cig_hud_glow.visible = false
+	if _smoke_gpu1 != null: _smoke_gpu1.emitting = false
+	if _smoke_gpu2 != null: _smoke_gpu2.emitting = false
+	if _smoke_gpu3 != null: _smoke_gpu3.emitting = false

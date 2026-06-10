@@ -49,6 +49,13 @@ signal orb_collected(amount: int)
 func _ready() -> void:
 	pass
 
+# 적 처치 등 길 위 오브 수집 외 경로로 BO를 직접 획득 (Doc 31 §1)
+func award_bo(amount: int) -> void:
+	if amount <= 0:
+		return
+	run_total_bo += amount
+	orb_collected.emit(amount)
+
 func load_assets() -> void:
 	if _tex_orb != null:
 		return

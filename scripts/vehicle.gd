@@ -16,6 +16,12 @@ const BRAKE_FORCE_BASE   := 40.0    # km/h/s
 const LATERAL_SPEED_BASE := 1.8     # cam_x(차선) 단위/초
 const COLLISION_WIDTH    := 0.6     # 차폭 (차선 단위)
 
+# ── 전투: 속도 임계 처치 (Doc 31 §1) ──────────────────────────
+# 충돌 속도가 임계 이상이면 관통 처치, 미만이면 충격 튕김.
+const KILL_THRESHOLD_BASE := 80.0   # km/h. 적별 기본값은 game_world에서 가산
+const ENGINE_THRESHOLD_PER_LV := 3.0 # 엔진 레벨당 임계 -3 (Lv5 → -15, 최저 65)
+const BOUNCE_SPEED_MULT   := 0.65   # 임계 미만 충돌 시 속도 -35%
+
 # ── 실제 적용되는 스탯 (업그레이드 반영) ───────────────────────
 var max_speed     : float = MAX_SPEED_BASE
 var accel         : float = ACCEL_BASE
@@ -133,7 +139,8 @@ var upgrade_levels := {
 	"fuel_tank": 0,   # 연료 용량
 	"turbine": 0,     # 연비 (연료 소모율 감소)
 	"tires": 0,       # 조향 속도 (횡이동)
-	"brakes": 0       # 제동력
+	"brakes": 0,      # 제동력
+	"bumper": 0       # Doc 31 §6: 전투 (임계 속도/관통/내구도)
 }
 
 func apply_upgrades(system = null, meta = null) -> void:
@@ -507,6 +514,37 @@ func apply_watcher_hit() -> void:
 	# 와쳐 충돌: 속도 살짝 감소 (20% 감속) + 짧은 가속 불가
 	speed *= 0.8
 	_accel_lock = 0.1
+
+# ── 전투: 속도 임계 처치 (Doc 31 §1, §6) ──────────────────────
+# 적별 기본 임계값에 엔진·범퍼 업그레이드 하향을 반영한 실효 임계 속도.
+func get_kill_threshold(base_threshold: float = KILL_THRESHOLD_BASE) -> float:
+	var engine_lv := float(upgrade_levels.get("engine", 0))
+	var bumper_lv := int(upgrade_levels.get("bumper", 0))
+	var bumper_red := 0.0
+	if bumper_lv >= 1: bumper_red += 5.0    # Lv1 강화 고무: -5
+	if bumper_lv >= 5: bumper_red += 10.0   # Lv5 전차 돌기: 추가 -10 (총 -15)
+	return base_threshold - engine_lv * ENGINE_THRESHOLD_PER_LV - bumper_red
+
+# Doc 31 §6 Lv2: 관통 처치 시 내구도 소모 -25%
+func get_pierce_dmg_mult() -> float:
+	return 0.75 if int(upgrade_levels.get("bumper", 0)) >= 2 else 1.0
+
+# Doc 31 §6 Lv4: 임계 미만 충돌(튕김) 내구도 손실 -40%
+func get_bounce_dmg_mult() -> float:
+	return 0.6 if int(upgrade_levels.get("bumper", 0)) >= 4 else 1.0
+
+# Doc 31 §6 Lv3: 관통 수 +1 (1 → 2명 동시 처치)
+func get_penetration_count() -> int:
+	return 2 if int(upgrade_levels.get("bumper", 0)) >= 3 else 1
+
+# 관통 처치: 모멘텀 유지(속도 감소 없음). 내구도 소모는 호출부에서 처리.
+func apply_pierce_kill() -> void:
+	pass
+
+# 충격 튕김: 급감속(-35%) + 짧은 가속 불가.
+func apply_bounce_hit() -> void:
+	speed *= BOUNCE_SPEED_MULT
+	_accel_lock = 0.2
 
 func apply_adrenaline_boost() -> void:
 	# 와쳐 등 적중 시 속도 유지 + 3초간 가속도 20% 보너스
