@@ -24,6 +24,7 @@ var _spear    : LastRoadSpear       # 창 던지기 (Doc 08)
 var _movers   : LastRoadMovers      # 러너·워커 (Doc 19)
 # ── 혼잣말 (Doc 26) ──
 var _deer     : LastRoadDeer        # 사슴머리 (Doc 06/19, 스테이지 6)
+var _cutscene : CutscenePlayer      # 런 클리어 컷신 (Doc 25)
 var _deer_desat_pulse : float = 0.0 # 통과 순간 채도 급락 잔여
 var _mono     : MonologueSystem = MonologueSystem.new()
 var _mono_prev_radio_death : bool = false
@@ -196,6 +197,7 @@ const _JumperScript  = preload("res://scripts/jumper_system.gd")
 const _SpearScript   = preload("res://scripts/spear_system.gd")
 const _MoverScript   = preload("res://scripts/mover_system.gd")
 const _DeerScript    = preload("res://scripts/deer_system.gd")
+const _CutsceneScript = preload("res://scripts/cutscene_player.gd")
 const _InvMgrScript  = preload("res://scripts/inventory_manager.gd")
 const _LootUIScript  = preload("res://scripts/loot_ui.gd")
 const _ShopUIScript  = preload("res://scripts/shop_ui.gd")
@@ -276,6 +278,10 @@ func _ready() -> void:
 	_deer.deer_passed.connect(_on_deer_passed)
 	add_child(_deer)
 
+	_cutscene = _CutsceneScript.new()
+	_cutscene.finished.connect(_on_cutscene_finished)
+	add_child(_cutscene)
+
 	_build_collapse_overlay()
 
 	_obstacles = _ObstacleScript.new()
@@ -328,6 +334,7 @@ func _ready() -> void:
 	_loot_ui.loot_ui_closed.connect(func(): _hud.hide_loot_prompt())
 	_loot_ui.item_used.connect(_on_item_used)
 	_hud.loot_ui = _loot_ui
+	_hud.meta = _meta
 	
 	_hud.charm_sys = _charm_sys
 	_hud.init_charm_sys()
@@ -525,8 +532,11 @@ func _process(delta: float) -> void:
 		_state_timer += delta
 		_update_loop_ending(delta)
 		if _state_timer >= LOOP_ENDING_DURATION:
-			_show_main_menu()
+			_start_run_cutscene()
 		return
+
+	if _game_state == "cutscene":
+		return   # cutscene_player가 finished를 보내면 메뉴로
 	
 	if _game_state == "stage_exit":
 		_state_timer += delta
@@ -1509,6 +1519,19 @@ func _on_deer_passed(speed_kmh: float) -> void:
 	if _hallucination:
 		_hallucination.trigger_glitch(0.4)
 
+# ── 런 클리어 컷신 (Doc 25) ──────────────────────────────────
+func _start_run_cutscene() -> void:
+	_meta.full_clears += 1
+	_meta.save_data()
+	_game_state = "cutscene"
+	_hud.visible = false
+	_hud.hide_stage_overlay()
+	_cutscene.play(CutscenePlayer.pages_for_clear(_meta.full_clears))
+
+func _on_cutscene_finished() -> void:
+	if _game_state == "cutscene":
+		_show_main_menu()
+
 # ── 일반 종료 연출 (Doc 11) ──────────────────────────────────
 ## 서서히 어두워지며 혼잣말 4줄. 마지막 줄이 런 시작 대사와 같다 — 루프.
 func _update_loop_ending(_delta: float) -> void:
@@ -2030,6 +2053,7 @@ func _reset_game() -> void:
 	_sanity_ratio = 1.0
 	_exit_collapse()
 	_mono.reset_run()
+	_meta.total_runs += 1   # 라디오 죽음의 주파수 단계 (초기 1~3 / 중기 4~6)
 	_mono_prev_radio_death = false
 	_mono_fuel40_said = false
 	_mono_fuel15_said = false

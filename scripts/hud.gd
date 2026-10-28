@@ -412,6 +412,12 @@ var _d_toggled      : bool = false  # 계기판 줌 토글
 var _dash_focus_t   : float = 0.0   # 계기판 줌을 위한 보간 변수 (0~1)
 var _is_dragging_dial : bool = false
 var loot_ui : Node = null           # 인벤토리 UI 참조 (game_world에서 주입)
+var meta : MetaProgression = null   # 라디오 방송 단계(런 횟수·도망자 충돌)용 (game_world에서 주입)
+# ── 라디오 방송 자막 티커 (Doc 27) — 라디오 줌(V) 중에만 LCD 아래 표시 ──
+var _radio_text_label : Label
+var _radio_scripts := RadioScripts.new()
+var _radio_text_timer : float = 0.0
+var _radio_text_prev_death : bool = false
 var shop_ui : Node = null           # 상점/경로선택 UI 참조 (game_world에서 주입)
 var charm_sys : Node = null         # 부적 시스템 참조
 
@@ -588,6 +594,8 @@ func _process(delta: float) -> void:
 		_shakes[key] = maxf(_shakes[key] - delta, 0.0)
 		if _shakes[key] == 0.0:
 			_shakes.erase(key)
+
+	_update_radio_ticker(delta)
 
 	# 창 경고 펄스 — 정신력 무채색화와 무관하게 항상 붉음
 	if _mirror_alert != null:
@@ -1044,6 +1052,20 @@ func _build_radio() -> void:
 		_radio_dial.scale = scale_inv
 		_radio_dial.texture_filter = CanvasItem.TEXTURE_FILTER_NEAREST
 	_dash.add_child(_radio_dial)
+
+	# 방송 자막 티커 — 줌(2.5배) 상태에서 읽히는 크기. 평소엔 숨김
+	_radio_text_label = Label.new()
+	_radio_text_label.position = (RADIO_PANEL_POS + Vector2(6.0, 60.0)) * scale_inv
+	_radio_text_label.size = Vector2(196.0, 44.0)
+	_radio_text_label.scale = scale_inv
+	_radio_text_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	_radio_text_label.add_theme_font_size_override("font_size", 7)
+	_radio_text_label.add_theme_color_override("font_color", Color(0.95, 0.80, 0.35, 0.9))
+	var font_neo_r := load("res://Font/NeoDunggeunmoPro-Regular.ttf") as Font
+	if font_neo_r:
+		_radio_text_label.add_theme_font_override("font", font_neo_r)
+	_radio_text_label.visible = false
+	_dash.add_child(_radio_text_label)
 	_update_radio_display()
 
 func _build_clock() -> void:
@@ -1224,6 +1246,37 @@ func _on_mirror_alert_draw() -> void:
 	_mirror_alert.draw_rect(Rect2(Vector2(0.0, size.y - w), Vector2(size.x, w)), col)
 	_mirror_alert.draw_rect(Rect2(Vector2.ZERO, Vector2(w, size.y)), col)
 	_mirror_alert.draw_rect(Rect2(Vector2(size.x - w, 0.0), Vector2(w, size.y)), col)
+
+## 라디오 방송 자막 — 줌 중에만. 일반 주파수는 프로그램 순환, 죽음의 주파수는 난수방송
+func _update_radio_ticker(delta: float) -> void:
+	if _radio_text_label == null:
+		return
+	if _radio_focus_t < 0.4 or not visible:
+		_radio_text_label.visible = false
+		return
+	_radio_text_label.visible = true
+	# 주파수가 바뀌면 즉시 새 줄
+	if _radio_on_death != _radio_text_prev_death:
+		_radio_text_timer = 0.0
+		_radio_text_prev_death = _radio_on_death
+	_radio_text_timer -= delta
+	if _radio_text_timer > 0.0:
+		return
+	var runs := 1
+	var hits := 0
+	var late := false
+	if meta != null:
+		runs = maxi(meta.total_runs, 1)
+		hits = meta.fleeing_hit_count
+		late = meta.locked_slot_unlocked
+	if _radio_on_death:
+		_radio_text_label.text = _radio_scripts.next_death(runs, late)
+		_radio_text_label.add_theme_color_override("font_color", Color(0.95, 0.40, 0.35, 0.9))
+		_radio_text_timer = 3.5
+	else:
+		_radio_text_label.text = _radio_scripts.next_normal(hits, late)
+		_radio_text_label.add_theme_color_override("font_color", Color(0.95, 0.80, 0.35, 0.9))
+		_radio_text_timer = 7.0
 
 ## 라디오 줌(V) 중인지 — Doc 30 상호 잠금용
 func is_radio_zoomed() -> bool:
