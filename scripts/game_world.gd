@@ -52,6 +52,12 @@ const RUNNER_KILL_THRESHOLD  := 85.0   # Doc 31 적별 임계: 러너(이동 중
 const RUNNER_KILL_BO         := 5      # Doc 19
 const WALKER_KILL_THRESHOLD  := 80.0
 const WALKER_KILL_BO         := 6
+const AMBUSHER_KILL_THRESHOLD := 90.0  # 갑자기 뛰쳐나오므로 더 높은 속도 필요
+const AMBUSHER_KILL_BO        := 7
+const CULT_KILL_THRESHOLD    := 75.0   # 저항력 낮은 인간형
+const CULT_KILL_BO           := 10
+const CULT_LEADER_KILL_THRESHOLD := 100.0  # 단일 최고 임계
+const CULT_LEADER_KILL_BO    := 25
 # 관통 처치(임계 이상): 내구도 소량 소모
 const PIERCE_TIRE_DMG        := 1.5
 const PIERCE_DRIVETRAIN_DMG  := 0.5
@@ -786,10 +792,28 @@ func _process(delta: float) -> void:
 	# 러너·워커 (Doc 19) — 와쳐와 같은 속도 임계 처치 규칙, 적별 임계·BO만 다름
 	var mov_hits := _movers.check_collision(_vehicle, _vehicle.get_penetration_count())
 	for mh in mov_hits:
-		if int(mh["type"]) == LastRoadMovers.MoverType.WALKER:
-			_resolve_speed_kill(WALKER_KILL_THRESHOLD, WALKER_KILL_BO)
-		else:
-			_resolve_speed_kill(RUNNER_KILL_THRESHOLD, RUNNER_KILL_BO)
+		match int(mh["type"]):
+			LastRoadMovers.MoverType.WALKER:
+				_resolve_speed_kill(WALKER_KILL_THRESHOLD, WALKER_KILL_BO)
+			LastRoadMovers.MoverType.AMBUSHER:
+				_resolve_speed_kill(AMBUSHER_KILL_THRESHOLD, AMBUSHER_KILL_BO)
+				_sanity_ratio -= 0.08   # Doc 19: 앰부서 -8
+			LastRoadMovers.MoverType.CULT:
+				# Doc 19 행렬 컬트: 인간형 충돌 정신력 비용은 처치 여부와 무관
+				if bool(mh.get("leader", false)):
+					_resolve_speed_kill(CULT_LEADER_KILL_THRESHOLD, CULT_LEADER_KILL_BO)
+					_sanity_ratio -= 0.25
+				else:
+					_resolve_speed_kill(CULT_KILL_THRESHOLD, CULT_KILL_BO)
+					_sanity_ratio -= 0.15
+			_:
+				_resolve_speed_kill(RUNNER_KILL_THRESHOLD, RUNNER_KILL_BO)
+		_sanity_ratio = clampf(_sanity_ratio, 0.0, 1.0)
+	if _movers.consume_cult_passed():
+		_sanity_ratio = clampf(_sanity_ratio - 0.02, 0.0, 1.0)   # 행렬 회피: 시선 비용 -2
+	if _movers.consume_ambush():
+		_say("ambusher")
+		_hud.play_sfx("warning", 1.2)
 	if _jiwons.check_collision(_vehicle):
 		var is_hal := false
 		for k in _jiwons._hit_info.keys():
