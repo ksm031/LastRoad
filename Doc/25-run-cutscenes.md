@@ -1,8 +1,10 @@
 # 25. 런 클리어 컷신 시스템
 
 <!-- impl-status:begin -->
-> **구현 상태** (2026-10-28 코드 대조): **❌ 미구현**
-> - 컷신 재생 시스템 없음. `meta_progression.gd corpse_cutscene_played` 플래그만. `Asset/Movie/` 존재하나 환각 영상용(`hallucination_video.gd`)
+> **구현 상태** (2026-10-28 코드 대조, 같은 날 구현 반영): **🟡 텍스트 버전 (`cutscene_player.gd`)**
+> - ✅ 트리거: 6스테이지 클리어 → 일반 종료 연출 → 회차 컷신(meta.full_clears) → 메뉴. 10회+는 9번 반복
+> - ✅ 컷신 1~9 텍스트 각색 (어둠 위 문장 페이드, 키 스킵)
+> - ❌ 픽셀아트 컷어웨이·사운드, A/B 엔딩 분기, 10회+ 트렁크 컷신 (진엔딩 미구현)
 <!-- impl-status:end -->
 
 ## 개요
