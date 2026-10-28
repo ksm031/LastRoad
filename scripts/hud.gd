@@ -58,6 +58,10 @@ var _sfx_impact  : AudioStreamPlayer
 var _sfx_repair  : AudioStreamPlayer
 var _sfx_warning : AudioStreamPlayer
 var _sfx_pickup  : AudioStreamPlayer  # BO 흡수 '띵' (Doc 31 §2)
+var _sfx_whoosh  : AudioStreamPlayer  # 창 스쳐 지나감 (Doc 08)
+var _sfx_breath  : AudioStreamPlayer  # 괴물 들숨 — 창 경고 (Doc 08)
+var _sfx_engine  : AudioStreamPlayer  # 엔진 루프 (RPM → pitch)
+const SFX_DIR := "res://Asset/Sound/SFX/"   # tools/gen_placeholder_sfx.py 가 생성한 임시 합성음
 
 # ── 저연료 및 괴물 추격 시각 효과 ──────────────────────────────────
 var _low_fuel_overlay : ColorRect
@@ -193,7 +197,11 @@ func _ready() -> void:
 	_sfx_repair = AudioStreamPlayer.new(); add_child(_sfx_repair)
 	_sfx_warning = AudioStreamPlayer.new(); add_child(_sfx_warning)
 	_sfx_pickup = AudioStreamPlayer.new(); add_child(_sfx_pickup)
-	
+	_sfx_whoosh = AudioStreamPlayer.new(); add_child(_sfx_whoosh)
+	_sfx_breath = AudioStreamPlayer.new(); add_child(_sfx_breath)
+	_sfx_engine = AudioStreamPlayer.new(); add_child(_sfx_engine)
+	_load_sfx_streams()
+
 	_build_jumper_overlay()  # dashboard보다 먼저 추가 → 대시보드 뒤에 렌더
 	_build_dashboard()
 	_build_wipers()
@@ -785,13 +793,65 @@ func play_sfx(type: String, pitch: float = 1.0) -> void:
 		"repair": player = _sfx_repair
 		"warning": player = _sfx_warning
 		"pickup": player = _sfx_pickup
+		"whoosh": player = _sfx_whoosh
+		"breath": player = _sfx_breath
 
-	if player and not player.playing:
-		# TODO: 실제 사운드 파일 경로 할당 필요
-		# var sfx = load("res://Asset/Sound/" + type + ".wav")
-		# if sfx: player.stream = sfx
-		player.pitch_scale = pitch
-		player.play()
+	if player == null or player.stream == null:
+		return
+	# pickup(BO 흡수)은 연타가 잦으므로 재생 중이어도 다시 시작
+	if player.playing and type != "pickup":
+		return
+	player.pitch_scale = pitch
+	player.play()
+
+## 임시 합성음 로드 (파일이 없으면 조용히 무음 유지 — 진짜 에셋이 오면 같은 이름으로 교체)
+func _load_sfx_streams() -> void:
+	var table := {
+		_sfx_impact:  ["impact.wav",  -6.0],
+		_sfx_repair:  ["repair.wav",  -10.0],
+		_sfx_warning: ["warning.wav", -9.0],
+		_sfx_pickup:  ["pickup.wav",  -8.0],
+		_sfx_whoosh:  ["whoosh.wav",  -6.0],
+		_sfx_breath:  ["monster_breath.wav", -4.0],
+		_sfx_engine:  ["engine_loop.wav", -16.0],
+	}
+	for player in table:
+		var path: String = SFX_DIR + String(table[player][0])
+		if not ResourceLoader.exists(path):
+			continue
+		var s := load(path)
+		if s == null:
+			continue
+		player.stream = s
+		player.volume_db = float(table[player][1])
+	# 엔진 루프: WAV 루프 플래그 (임포트 설정과 무관하게 런타임에 지정)
+	if _sfx_engine.stream is AudioStreamWAV:
+		var w := _sfx_engine.stream as AudioStreamWAV
+		w.loop_mode = AudioStreamWAV.LOOP_FORWARD
+		w.loop_begin = 0
+		var bytes_per_frame := 2 if w.format == AudioStreamWAV.FORMAT_16_BITS else 1
+		if w.stereo: bytes_per_frame *= 2
+		w.loop_end = int(w.data.size() / bytes_per_frame)
+
+## 엔진 루프 — RPM에 따라 음높이, 속도에 따라 음량. HUD.update에서 매 프레임 호출
+func _update_engine_sound(rpm: float, speed: float) -> void:
+	if _sfx_engine == null or _sfx_engine.stream == null:
+		return
+	if not visible:
+		if _sfx_engine.playing: _sfx_engine.stop()
+		return
+	if not _sfx_engine.playing:
+		_sfx_engine.play()
+	var t := clampf((rpm - RPM_IDLE) / (RPM_REDLINE - RPM_IDLE), 0.0, 1.0)
+	# 800rpm → 1.0, 7200rpm → 2.6. 급변 시 튀지 않게 보간
+	var target_pitch := lerpf(1.0, 2.6, t)
+	_sfx_engine.pitch_scale = lerpf(_sfx_engine.pitch_scale, target_pitch, 0.25)
+	_sfx_engine.volume_db = lerpf(-20.0, -11.0, clampf(speed / 120.0, 0.0, 1.0)) + t * 3.0
+
+## 엔진음 정지 (게임오버·메뉴 복귀 시)
+func stop_engine_sound() -> void:
+	if _sfx_engine != null and _sfx_engine.playing:
+		_sfx_engine.stop()
 
 ## 처치 BO 획득 팝업 (+N) — BO 카운터 옆에서 떠오르며 사라짐 (Doc 31 §2)
 func popup_bo(amount: int) -> void:
@@ -1630,6 +1690,7 @@ func update(speed: float, scroll_z: float, steering_angle: float, rpm: float, mo
 
 	
 	_update_gauges(speed, rpm, fuel_ratio)
+	_update_engine_sound(rpm, speed)
 	_update_shake(speed, scroll_z, steering_angle)
 	_update_visual_effects(monster_distance)
 	_update_clock(delta)

@@ -519,6 +519,7 @@ func _process(delta: float) -> void:
 		_state_timer = 0.0
 		_hud.show_gameover()
 		_hud.set_mirror_alert(false)
+		_hud.stop_engine_sound()
 		if _hallucination: _hallucination.force_stop()
 		return
 	
@@ -1306,7 +1307,7 @@ func _update_backdrops(delta: float) -> void:
 func _on_spear_warning(_shown_side: int) -> void:
 	if _game_state != "playing":
 		return
-	_hud.play_sfx("warning", 0.55)   # 깊은 들숨 대용 (저음)
+	_hud.play_sfx("breath")   # 멀리서 들리는 깊은 들숨
 
 func _on_spear_hit(_side: int) -> void:
 	if _game_state != "playing":
@@ -1329,7 +1330,7 @@ func _on_spear_missed(_side: int) -> void:
 		return
 	# 옆을 휙 지나감: 짧은 셰이크만. 회피 보상 없음 (살아남은 것이 보상)
 	_trigger_cam_shake(2.0, 0.15)
-	_hud.play_sfx("warning", 1.4)
+	_hud.play_sfx("whoosh")
 
 func _on_jumper_boarded() -> void:
 	if _game_state != "playing":
@@ -1486,6 +1487,7 @@ func _show_main_menu() -> void:
 	_game_state = "main_menu"
 	_menu_container.visible = true
 	_hud.visible = false
+	_hud.stop_engine_sound()
 	_hud.hide_stage_overlay()
 	_rain.stop_rain()
 	_camera.zoom = Vector2.ONE
