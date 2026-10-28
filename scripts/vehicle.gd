@@ -128,7 +128,14 @@ var fuel           : float = 40.0      # 현재 연료 (L) - _BASE_FUEL_MAX와 �
 var fuel_ratio     : float = 1.0       # fuel / fuel_max (0~1), HUD 표시용
 
 # ── 방해물(돌) 패널티 ─────────────────────────────────────────
-const ROCK_HIT_SPEED   := 15.0  # "시속 10km대"
+const ROCK_HIT_SPEED_MULT := 0.55  # 바위 충돌 시 속도 배율 (90 → ~50, 복귀 ~8초). 15km/h 고정은 복귀 15초라 '대기'가 됨
+const ROCK_HIT_SPEED_MIN  := 15.0  # 바위 충돌 후 최저 속도
+# ── 고속 조향 둔화 (02-core-loop: 속도↑ → 회피 반응시간↓) ──
+# HI_STEER_START 이상부터 횡이동 속도가 선형으로 줄어 HI_STEER_END에서 HI_STEER_MIN_MULT.
+# 타이어 업그레이드(lateral_speed↑)가 이를 상쇄 → "좋은 파츠가 고속 전략의 전제" 구조
+const HI_STEER_START    := 60.0
+const HI_STEER_END      := 120.0
+const HI_STEER_MIN_MULT := 0.6
 const ACCEL_LOCK_TIME  := 0.2
 var _accel_lock: float = 0.0
 var _adrenaline_timer: float = 0.0
@@ -398,6 +405,9 @@ func handle_input(delta: float) -> void:
 
 	# 차량 속도에 비례하여 좌우 조향(차선 변경) 속도 조절 (비 올 때 traction_factor 반영)
 	var lateral_mult := clampf(speed / 50.0, 0.0, 1.0) * traction_factor
+	# 고속 둔화: 60km/h부터 줄어 120km/h에서 60% (02-core-loop 속도 딜레마의 '반응시간' 축)
+	var hi_t := clampf((speed - HI_STEER_START) / (HI_STEER_END - HI_STEER_START), 0.0, 1.0)
+	lateral_mult *= lerpf(1.0, HI_STEER_MIN_MULT, hi_t)
 	var frame_pull = pull_dir * 0.25 * lateral_speed * lateral_mult * delta
 	
 	var lat_move := 0.0
@@ -506,8 +516,8 @@ func update_rpm(delta: float) -> void:
 
 
 func apply_rock_hit() -> void:
-	# 속도 급락 + 잠깐 가속 불가
-	speed = ROCK_HIT_SPEED
+	# 속도 급락(배율) + 잠깐 가속 불가. 손상은 호출부(apply_part_damage)에서 처리
+	speed = maxf(speed * ROCK_HIT_SPEED_MULT, ROCK_HIT_SPEED_MIN)
 	_accel_lock = ACCEL_LOCK_TIME
 
 func apply_watcher_hit() -> void:
