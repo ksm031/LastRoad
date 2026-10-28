@@ -15,6 +15,11 @@ var _monster_distance : float = 200.0
 var max_dist : float = 150.0   # 이 거리에서 지평선 크기. game_world.MONSTER_MAX_DIST와 동기화
 var _anim_time : float = 0.0
 
+# ── 창 던지기 연출 (Doc 08): game_world가 매 프레임 spear_system.get_mirror_state()를 넣어준다 ──
+# { phase, side(-1/1), arm_t(0~1 팔 올림), streak_t(0~1 창 접근) }
+var spear_state : Dictionary = {}
+var _spear_fx : Node2D   # 웬디고 스프라이트 위에 그리기 위한 별도 레이어
+
 # 나무 렌더링 관련
 var _tree_textures : Array[Texture2D] = []
 const TREE_BASE_H := 480.0
@@ -42,6 +47,11 @@ func _ready() -> void:
 		_wendigo.texture_filter = CanvasItem.TEXTURE_FILTER_LINEAR
 	add_child(_wendigo)
 
+	# 창 연출 레이어 — 웬디고 뒤에 add 해야 위에 그려짐
+	_spear_fx = Node2D.new()
+	_spear_fx.draw.connect(_on_spear_fx_draw)
+	add_child(_spear_fx)
+
 func update_state(p_scroll_z: float, monster_dist: float, delta: float, zoomed: bool = false) -> void:
 	scroll_z = p_scroll_z
 	_monster_distance = monster_dist
@@ -68,6 +78,50 @@ func update_state(p_scroll_z: float, monster_dist: float, delta: float, zoomed: 
 		_wendigo.position = Vector2(BillboardManager.SCREEN_W * 0.5, ground_y - target_h * 0.5)
 
 	queue_redraw()
+	if _spear_fx:
+		_spear_fx.queue_redraw()
+
+# ── 창 던지기: 들린 팔 + 날아오는 창 (Doc 08 §시퀀스) ──
+# 룸미러는 좌우 반전 없음 → 오른쪽 화면에 손이 보이면 도로 오른쪽으로 창이 온다.
+func _on_spear_fx_draw() -> void:
+	if spear_state.is_empty() or _wendigo == null or _wendigo.texture == null:
+		return
+	var side := int(spear_state.get("side", 1))
+	var arm_t := float(spear_state.get("arm_t", 0.0))
+	var streak_t := float(spear_state.get("streak_t", 0.0))
+	if arm_t <= 0.0 and streak_t <= 0.0:
+		return
+
+	var frame_w := float(_wendigo.texture.get_width()) / float(_wendigo.hframes) * _wendigo.scale.x
+	var frame_h := float(_wendigo.texture.get_height()) / float(_wendigo.vframes) * _wendigo.scale.y
+	var pos := _wendigo.position
+	var black := Color(0.02, 0.02, 0.03, 1.0)
+
+	if arm_t > 0.0:
+		# 어깨 → 머리 위로 올라가는 팔 + 창. 멀리 있어도 식별되도록 최소 두께 보장
+		var shoulder := pos + Vector2(float(side) * frame_w * 0.28, -frame_h * 0.12)
+		var reach := frame_h * 0.75 * arm_t
+		var hand := shoulder + Vector2(float(side) * frame_w * 0.22 * arm_t, -reach)
+		var thick := maxf(frame_w * 0.08, 2.5)
+		_spear_fx.draw_line(shoulder, hand, black, thick)
+		# 창: 손에서 위로 길게. 윈드업 후반에 수평→수직으로 세워짐
+		var spear_len := frame_h * 0.9 * clampf(arm_t * 1.3, 0.0, 1.0)
+		var tip := hand + Vector2(float(side) * spear_len * (1.0 - arm_t) * 0.6, -spear_len * arm_t)
+		_spear_fx.draw_line(hand, tip, black, maxf(thick * 0.7, 2.0))
+		# 창끝 들쭉날쭉한 느낌: 짧은 가지 2개
+		var d := (tip - hand).normalized()
+		_spear_fx.draw_line(tip, tip - d * spear_len * 0.15 + d.orthogonal() * thick * 1.5, black, maxf(thick * 0.5, 1.5))
+		_spear_fx.draw_line(tip, tip - d * spear_len * 0.12 - d.orthogonal() * thick * 1.2, black, maxf(thick * 0.5, 1.5))
+
+	if streak_t > 0.0:
+		# 괴물 손에서 거울 하단(차 뒤) side 쪽으로 쭉 뻗어오는 검은 줄기
+		var start := pos + Vector2(float(side) * frame_w * 0.4, -frame_h * 0.6)
+		var end_pt := Vector2(BillboardManager.SCREEN_W * 0.5 + float(side) * 420.0, BillboardManager.SCREEN_H + 40.0)
+		var head := start.lerp(end_pt, streak_t)
+		var tail := start.lerp(end_pt, maxf(streak_t - 0.35, 0.0))
+		var w := lerpf(2.0, 26.0, streak_t)
+		_spear_fx.draw_line(tail, head, black, w)
+		_spear_fx.draw_line(tail, head, Color(0.02, 0.02, 0.03, 0.35), w * 2.2)
 
 func _draw() -> void:
 	var hy := BillboardManager.HORIZON_Y

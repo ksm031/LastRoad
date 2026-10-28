@@ -19,6 +19,7 @@ const _DEFAULTS := {
 	"watcher":    { "spacing": 35.0, "chance": 0.42, "scale": true  },
 	"jumper":     { "spacing": 65.0, "chance": 0.15, "scale": true  },
 	"obstacle":   { "spacing": 18.0, "chance": 0.25, "scale": true  },
+	"mover":      { "spacing": 55.0, "chance": 0.30, "scale": true  },  # 러너·워커 (스테이지 게이트는 mover_system)
 }
 
 # ── 루트별 모디파이어 테이블 ──────────────────────────────────
@@ -44,6 +45,8 @@ const _ROUTE_TABLE := {
 		                "chance_mult":  1.5,  "chance_max":  0.80 },
 		"jumper":     { "spacing_mult": 0.72, "spacing_min": 28.0,
 		                "chance_mult":  1.4,  "chance_max":  0.45 },
+		"mover":      { "spacing_mult": 0.75, "spacing_min": 30.0,
+		                "chance_mult":  1.4,  "chance_max":  0.60 },
 		"scavenging": { "chance_abs": 0.60 },
 	},
 

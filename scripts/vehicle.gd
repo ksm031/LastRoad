@@ -312,7 +312,15 @@ func handle_input(delta: float) -> void:
 
 	if _accel_lock > 0.0:
 		w = false
-	
+
+	# 창 명중 핸들 잠금: 좌우 입력 무시 + 핸들이 제멋대로 흔들림
+	var steer_jolt := 0.0
+	if _steer_lock > 0.0:
+		_steer_lock = maxf(_steer_lock - delta, 0.0)
+		a = false
+		d = false
+		steer_jolt = randf_range(-10.0, 10.0) * (_steer_lock / 0.5)
+
 	# 구동계 간헐 정지 체크 (GDD §4.2: 30초마다 0.5초 가속 무효)
 	if update_drivetrain_stall(delta):
 		w = false
@@ -429,8 +437,11 @@ func handle_input(delta: float) -> void:
 		target_off = PLAYER_STEER_MAX_DEG
 	_player_steer_offset = move_toward(_player_steer_offset, target_off, STEER_SPEED * delta * traction_factor)
 
-	var target_steer := clampf(auto + _player_steer_offset, -MAX_STEER_DEG, MAX_STEER_DEG)
+	var target_steer := clampf(auto + _player_steer_offset + steer_jolt, -MAX_STEER_DEG, MAX_STEER_DEG)
 	steering_angle = move_toward(steering_angle, target_steer, STEER_SPEED * delta * traction_factor)
+	if steer_jolt != 0.0:
+		# 흔들리는 핸들만큼 차도 조금씩 밀린다
+		cam_x = clampf(cam_x + steer_jolt * 0.012 * delta, -1.0, 1.0)
 
 func update_scroll(delta: float) -> void:
 	scroll_z += speed * SCROLL_RATE * delta
@@ -555,6 +566,12 @@ func apply_pierce_kill() -> void:
 func apply_bounce_hit() -> void:
 	speed *= BOUNCE_SPEED_MULT
 	_accel_lock = 0.2
+
+# ── 창 명중 (Doc 08 §명중 시 효과): 0.5초 핸들 흔들림(조작 불가) + 속도 소폭 감소 ──
+var _steer_lock: float = 0.0
+func apply_spear_hit() -> void:
+	speed *= 0.85
+	_steer_lock = 0.5
 
 func apply_adrenaline_boost() -> void:
 	# 와쳐 등 적중 시 속도 유지 + 3초간 가속도 20% 보너스

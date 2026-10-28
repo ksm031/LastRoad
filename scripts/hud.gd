@@ -37,6 +37,9 @@ const RPM_REDLINE := 7200.0
 var _mirror_clip  : Control
 var _portrait     : Sprite2D
 var _rearview_node: RearviewRenderer
+var _mirror_alert : Node2D          # 창 경고 붉은 펄스 테두리
+var _mirror_alert_on : bool = false
+var _mirror_alert_t  : float = 0.0  # 펄스 위상
 var _dash         : Sprite2D
 var _wheel        : Sprite2D
 var _spd_pivot    : Node2D
@@ -577,6 +580,15 @@ func _process(delta: float) -> void:
 		_shakes[key] = maxf(_shakes[key] - delta, 0.0)
 		if _shakes[key] == 0.0:
 			_shakes.erase(key)
+
+	# 창 경고 펄스 — 정신력 무채색화와 무관하게 항상 붉음
+	if _mirror_alert != null:
+		if _mirror_alert_on:
+			_mirror_alert_t += delta * 9.0
+			_mirror_alert.queue_redraw()
+		elif _mirror_alert_t != 0.0:
+			_mirror_alert_t = 0.0
+			_mirror_alert.queue_redraw()
 			
 	if _subtitle_timer > 0.0:
 		_subtitle_timer -= delta
@@ -817,6 +829,15 @@ func _build_portrait_and_mirror() -> void:
 	_rearview_node = RearviewRenderer.new()
 	_rearview_node.modulate = Color(0.95, 0.95, 1.0)
 	_mirror_clip.add_child(_rearview_node)
+
+	# 창 경고용 붉은 테두리 (Doc 08 §룸미러 시각 강조) — 미러 위에 그려지도록 clip 뒤에 add
+	_mirror_alert = Node2D.new()
+	_mirror_alert.position = MIRROR_MIN
+	_mirror_alert.draw.connect(_on_mirror_alert_draw)
+	if _dash != null:
+		_dash.add_child(_mirror_alert)
+	else:
+		add_child(_mirror_alert)
 	
 	_tex_portrait = load("res://Asset/Image/Portrait.png")
 	_tex_blink_1  = load("res://Asset/Image/Portrait_blink_01.png")
@@ -1102,6 +1123,27 @@ func _update_radio_display() -> void:
 		_radio_dial.rotation = deg_to_rad(angle)
 
 ## 라디오가 죽음의 주파수인지 외부에서 확인
+## 창 경고 테두리 on/off (spear_system 상태를 game_world가 전달)
+func set_mirror_alert(on: bool) -> void:
+	_mirror_alert_on = on
+
+func _on_mirror_alert_draw() -> void:
+	if not _mirror_alert_on:
+		return
+	var pulse := (sin(_mirror_alert_t) + 1.0) * 0.5
+	var a := 0.35 + 0.55 * pulse
+	var col := Color(0.85, 0.05, 0.05, a)
+	var size := MIRROR_MAX - MIRROR_MIN
+	var w := 3.0
+	_mirror_alert.draw_rect(Rect2(Vector2.ZERO, Vector2(size.x, w)), col)
+	_mirror_alert.draw_rect(Rect2(Vector2(0.0, size.y - w), Vector2(size.x, w)), col)
+	_mirror_alert.draw_rect(Rect2(Vector2.ZERO, Vector2(w, size.y)), col)
+	_mirror_alert.draw_rect(Rect2(Vector2(size.x - w, 0.0), Vector2(w, size.y)), col)
+
+## 라디오 줌(V) 중인지 — Doc 30 상호 잠금용
+func is_radio_zoomed() -> bool:
+	return _v_toggled
+
 func get_radio_on_death() -> bool:
 	return _radio_on_death
 

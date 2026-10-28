@@ -20,6 +20,8 @@ var _scavenging: LastRoadScavenging
 var _watchers : LastRoadWatchers
 var _jiwons   : LastRoadJiwon
 var _jumpers  : LastRoadJumpers
+var _spear    : LastRoadSpear       # 창 던지기 (Doc 08)
+var _movers   : LastRoadMovers      # 러너·워커 (Doc 19)
 var _camera   : Camera2D
 var _inv_mgr  : InventoryManager
 var _loot_ui  : LootUI
@@ -38,6 +40,10 @@ const JUMPER_ESCAPE_HOLD    := 0.5    # 임계 속도 이상 유지해야 탈출
 # 적별 기본 임계 속도(km/h). 엔진 업그레이드로 하향됨(vehicle.get_kill_threshold).
 const WATCHER_KILL_THRESHOLD := 80.0
 const WATCHER_KILL_BO        := 3      # 관통 처치 시 획득 BO
+const RUNNER_KILL_THRESHOLD  := 85.0   # Doc 31 적별 임계: 러너(이동 중) 85
+const RUNNER_KILL_BO         := 5      # Doc 19
+const WALKER_KILL_THRESHOLD  := 80.0
+const WALKER_KILL_BO         := 6
 # 관통 처치(임계 이상): 내구도 소량 소모
 const PIERCE_TIRE_DMG        := 1.5
 const PIERCE_DRIVETRAIN_DMG  := 0.5
@@ -150,6 +156,8 @@ const _WatcherScript = preload("res://scripts/watcher_system.gd")
 const _JiwonScript   = preload("res://scripts/jiwon_system.gd")
 const _ScavengingScript = preload("res://scripts/scavenging_system.gd")
 const _JumperScript  = preload("res://scripts/jumper_system.gd")
+const _SpearScript   = preload("res://scripts/spear_system.gd")
+const _MoverScript   = preload("res://scripts/mover_system.gd")
 const _InvMgrScript  = preload("res://scripts/inventory_manager.gd")
 const _LootUIScript  = preload("res://scripts/loot_ui.gd")
 const _ShopUIScript  = preload("res://scripts/shop_ui.gd")
@@ -213,6 +221,17 @@ func _ready() -> void:
 	_jumpers.jumper_boarded.connect(_on_jumper_boarded)
 	_jumpers.billboard_mgr = _billboard_mgr
 	add_child(_jumpers)
+
+	# ── 창 던지기 (Doc 08) — 빌보드 위에 전방 비행을 그리므로 빌보드 다음에 add ──
+	_spear = _SpearScript.new()
+	_spear.spear_hit.connect(_on_spear_hit)
+	_spear.spear_missed.connect(_on_spear_missed)
+	_spear.spear_warning.connect(_on_spear_warning)
+	add_child(_spear)
+
+	_movers = _MoverScript.new()
+	_movers.billboard_mgr = _billboard_mgr
+	add_child(_movers)
 
 	_obstacles = _ObstacleScript.new()
 	_obstacles.billboard_mgr = _billboard_mgr
@@ -499,6 +518,7 @@ func _process(delta: float) -> void:
 		_game_state = "game_over"
 		_state_timer = 0.0
 		_hud.show_gameover()
+		_hud.set_mirror_alert(false)
 		if _hallucination: _hallucination.force_stop()
 		return
 	
@@ -665,6 +685,18 @@ func _process(delta: float) -> void:
 	_watchers.update_state(_vehicle.scroll_z, _vehicle.cam_x, curve_x, hill_px, _vehicle.headlight_range, _sanity_ratio)
 	_jiwons.update_state(_vehicle.scroll_z, _vehicle.cam_x, curve_x, hill_px, _vehicle.headlight_range)
 	_jumpers.update_state(_vehicle.scroll_z, _vehicle.cam_x, curve_x, hill_px, _vehicle.headlight_range)
+	_movers.update_state(_vehicle.scroll_z, _vehicle.cam_x, curve_x, hill_px, _vehicle.headlight_range)
+
+	# ── 창 던지기 (Doc 08) — Doc 30 §4 상호 잠금: 점퍼 탑승·인벤토리·라디오 줌 중엔 신규 발동 보류 ──
+	var spear_blocked := _jumper_on_hood \
+		or (_loot_ui != null and _loot_ui.is_open()) \
+		or _hud.is_radio_zoomed()
+	_spear.update_state(delta, current_stage, _monster_distance, MONSTER_MAX_DIST, _vehicle, curve_x, hill_px, spear_blocked)
+	var spear_mirror := _spear.get_mirror_state()
+	if _hud._rearview_node != null:
+		_hud._rearview_node.spear_state = spear_mirror
+	_hud.set_mirror_alert(bool(spear_mirror["alert"]))
+
 	_blood_orbs.update_state(_vehicle.scroll_z, _vehicle.cam_x, curve_x, hill_px, _vehicle.headlight_range, delta)
 	
 	_billboard_mgr.render_all()
@@ -693,6 +725,13 @@ func _process(delta: float) -> void:
 			# 실체 충돌: 속도 임계 처치 판정 (Doc 31 §1)
 			_resolve_speed_kill(WATCHER_KILL_THRESHOLD, WATCHER_KILL_BO)
 		_sanity_ratio = clampf(_sanity_ratio, 0.0, 1.0)
+	# 러너·워커 (Doc 19) — 와쳐와 같은 속도 임계 처치 규칙, 적별 임계·BO만 다름
+	var mov_hits := _movers.check_collision(_vehicle, _vehicle.get_penetration_count())
+	for mh in mov_hits:
+		if int(mh["type"]) == LastRoadMovers.MoverType.WALKER:
+			_resolve_speed_kill(WALKER_KILL_THRESHOLD, WALKER_KILL_BO)
+		else:
+			_resolve_speed_kill(RUNNER_KILL_THRESHOLD, RUNNER_KILL_BO)
 	if _jiwons.check_collision(_vehicle):
 		var is_hal := false
 		for k in _jiwons._hit_info.keys():
@@ -987,6 +1026,11 @@ func _advance_to_next_stage() -> void:
 
 	# 점퍼 상태 초기화 (점프 중이던 점퍼가 다음 스테이지에 넘어오지 않도록)
 	_jumpers._hit_info.clear()
+	# 진행 중이던 창 취소
+	_spear.reset_stage(current_stage)
+	_hud.set_mirror_alert(false)
+	if _hud._rearview_node != null:
+		_hud._rearview_node.spear_state = {}
 	_hud.stop_wiper()
 
 	# 성애·물방울 제거 (빗줄기는 유지)
@@ -1142,6 +1186,9 @@ func _apply_route_modifiers(route_type: String) -> void:
 	_watchers.seed_offset   = stage_seed + 11111
 	_jumpers.seed_offset    = stage_seed + 22222
 	_obstacles.seed_offset  = stage_seed + 33333
+	_movers.seed_offset     = stage_seed + 77777
+	_movers.stage           = current_stage
+	_movers.reset_stage()
 	_blood_orbs.seed_offset = stage_seed + 66666
 	_trees.seed_offset      = stage_seed + 44444
 	var bo_scale := 1.0 + (current_stage - 1) * 0.12
@@ -1167,6 +1214,9 @@ func _apply_route_modifiers(route_type: String) -> void:
 	_obstacles.SPACING_Z     = p["obstacle"]["spacing"]
 	_obstacles.SPAWN_CHANCE  = p["obstacle"]["chance"]
 	_obstacles.jiwon_info    = jiwon_info
+	_movers.SPACING_Z        = p["mover"]["spacing"]
+	_movers.SPAWN_CHANCE     = p["mover"]["chance"]
+	_movers.jiwon_info       = jiwon_info
 	_watchers.jiwon_info     = jiwon_info
 
 	# 비
@@ -1201,7 +1251,12 @@ func _apply_route_modifiers(route_type: String) -> void:
 	_watchers.set_dark_mode(is_dark or is_raining)
 	_jiwons.set_dark_mode(is_dark or is_raining)
 	_jumpers.set_dark_mode(is_dark or is_raining)
+
+	# 창 던지기 — 스테이지별 패턴 리셋 (3스테이지부터 발동)
+	_spear.reset_stage(current_stage)
+	_hud.set_mirror_alert(false)
 	_obstacles.set_dark_mode(is_dark or is_raining)
+	_movers.set_dark_mode(is_dark or is_raining)
 	_blood_orbs.set_dark_mode(is_dark or is_raining)
 
 # ── 아이템 사용 ─────────────────────────────────────────────
@@ -1246,6 +1301,35 @@ func _update_backdrops(delta: float) -> void:
 	_forest_scroll += forest_delta
 	_apply_bg_scroll()
 
+
+# ── 창 던지기 결과 (Doc 08 §명중 시 효과 / §빗맞춤 시 연출) ──
+func _on_spear_warning(_shown_side: int) -> void:
+	if _game_state != "playing":
+		return
+	_hud.play_sfx("warning", 0.55)   # 깊은 들숨 대용 (저음)
+
+func _on_spear_hit(_side: int) -> void:
+	if _game_state != "playing":
+		return
+	# 5개 부품 모두 -10% (창이 차체를 관통), 정신력 -25, 0.5초 핸들 잠금
+	_vehicle.apply_part_damage("all", 10.0, 10.0)
+	_vehicle.apply_spear_hit()
+	_sanity_ratio = clampf(_sanity_ratio - 0.25, 0.0, 1.0)
+	_reset_combo()
+	_trigger_cam_shake(9.0, 0.5)
+	BillboardManager.add_impact_shake(1.0)
+	_hud.trigger_shake("rock")
+	_hud.play_sfx("impact")
+	if _hallucination:
+		_hallucination.trigger_glitch(0.2)
+	_hud.show_subtitle("…뚫렸어.", 1.6)
+
+func _on_spear_missed(_side: int) -> void:
+	if _game_state != "playing":
+		return
+	# 옆을 휙 지나감: 짧은 셰이크만. 회피 보상 없음 (살아남은 것이 보상)
+	_trigger_cam_shake(2.0, 0.15)
+	_hud.play_sfx("warning", 1.4)
 
 func _on_jumper_boarded() -> void:
 	if _game_state != "playing":
@@ -1543,6 +1627,7 @@ func _load_all_assets() -> void:
 		func(): if _watchers.has_method("load_assets"): _watchers.load_assets(),
 		func(): if _jiwons.has_method("load_assets"): _jiwons.load_assets(),
 		func(): if _jumpers.has_method("load_assets"): _jumpers.load_assets(),
+		func(): if _movers.has_method("load_assets"): _movers.load_assets(),
 		func(): if _scavenging.has_method("load_assets"): _scavenging.load_assets(),
 		func(): if _blood_orbs.has_method("load_assets"): _blood_orbs.load_assets(),
 		func(): _build_sky_tiled(),
