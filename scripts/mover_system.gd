@@ -55,6 +55,13 @@ var _hit_info  : Dictionary = {}   # k -> { until_z, hit_time, type }
 var _runner_lane : Dictionary = {} # k -> float (활성화된 러너의 현재 차선)
 var jiwon_info : Dictionary = {}
 var billboard_mgr: BillboardManager
+var _runner_charged_flag: bool = false   # 러너가 막 돌진을 시작함 (혼잣말 트리거, 1회성)
+
+## 이번 프레임에 러너가 돌진을 시작했는가 (읽으면 소거)
+func consume_runner_charged() -> bool:
+	var f := _runner_charged_flag
+	_runner_charged_flag = false
+	return f
 
 var _runner_textures : Array[Texture2D] = []
 var _runner_down     : Array[Texture2D] = []
@@ -159,6 +166,7 @@ func _update_runners(delta: float) -> void:
 					continue
 				_runner_lane[k] = float(o["side"]) * RUNNER_START_LANE
 				PressureDirector.register_spike(2.5)
+				_runner_charged_flag = true
 			# 차의 현재 차선을 향해 일정 속도로 이동 (추적 지연 = 회피 창)
 			var cur := float(_runner_lane[k])
 			_runner_lane[k] = move_toward(cur, cam_x, RUNNER_LANE_SPEED * delta)

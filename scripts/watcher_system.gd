@@ -140,6 +140,19 @@ func check_collision(vehicle: LastRoadVehicle, max_hits: int = 1) -> Array:
 		hits.append({ "k": k, "is_hallucination": is_hal })
 	return hits
 
+## 가장 가까운 실체 와쳐까지의 거리 (없으면 큰 값). 혼잣말 트리거용
+func nearest_real_dz() -> float:
+	var best := 9999.0
+	var k0 := int(floor(scroll_z / SPACING_Z))
+	for k in range(k0, k0 + 4):
+		var o := _watcher_at_k(k)
+		if o.is_empty() or bool(o.get("is_hallucination", false)):
+			continue
+		var dz := float(o["wz"]) - scroll_z
+		if dz > 0.0 and dz < best:
+			best = dz
+	return best
+
 func is_hit_hallucination(k: int) -> bool:
 	if not _hit_info.has(k): return false
 	return bool(_hit_info[k].get("is_hallucination", false))

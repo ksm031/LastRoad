@@ -22,6 +22,14 @@ var _jiwons   : LastRoadJiwon
 var _jumpers  : LastRoadJumpers
 var _spear    : LastRoadSpear       # 창 던지기 (Doc 08)
 var _movers   : LastRoadMovers      # 러너·워커 (Doc 19)
+# ── 혼잣말 (Doc 26) ──
+var _mono     : MonologueSystem = MonologueSystem.new()
+var _mono_prev_radio_death : bool = false
+var _mono_radio_death_time : float = 0.0
+var _mono_fuel40_said : bool = false
+var _mono_fuel15_said : bool = false
+var _mono_monster_near : bool = false
+var _mono_quiet_time : float = 0.0   # 마지막 '사건' 이후 경과 (죄책감 발화 조건)
 var _camera   : Camera2D
 var _inv_mgr  : InventoryManager
 var _loot_ui  : LootUI
@@ -571,6 +579,7 @@ func _process(delta: float) -> void:
 		
 		# 클리어 연출 시작 시 정신력 시각 효과 제거
 		_clear_sanity_effects()
+		_say("maintenance")
 
 		if current_stage >= TOTAL_STAGES:
 			# 최종 스테이지 클리어 = 엔딩
@@ -589,6 +598,8 @@ func _process(delta: float) -> void:
 
 	# ── 부적 지속 효과 (Doc 28) ──
 	_update_charm_passives(delta)
+	# ── 혼잣말 상황 감지 (Doc 26) ──
+	_update_monologue(delta)
 	
 	# 라디오 죽음의 주파수: 정신력 -2/초 (GDD 18-radio.md)
 	if _hud.get_radio_on_death():
@@ -854,6 +865,7 @@ func _process(delta: float) -> void:
 			_jumper_on_hood = false
 			_jumper_escape_gauge = 0.0
 			_hud.set_jumper_on_hood(false, _vehicle.steering_angle > 0.0)
+			_say("jumper_off")
 			# 탈출 성공 보상 + 처치 juice (콤보 적용)
 			var jmp_mult := _register_combo_kill()
 			var jmp_bo := int(round(float(JUMPER_KILL_BO) * jmp_mult))
@@ -1370,6 +1382,60 @@ func _update_backdrops(delta: float) -> void:
 	_apply_bg_scroll()
 
 
+# ── 혼잣말 (Doc 26) ───────────────────────────────────────────
+## 상황 대사 시도. 침묵/쿨다운이면 아무것도 안 함
+func _say(situation: String, force: bool = false) -> void:
+	if _game_state != "playing" and situation != "maintenance" and situation != "run_start":
+		return
+	var line := _mono.pick(situation, _sanity_ratio, force)
+	if line != "":
+		_hud.show_subtitle(line, 2.6)
+		_mono_quiet_time = 0.0
+
+## 매 프레임 상황 감지: 와쳐 시야 진입, 러너 돌진, 라디오, 연료, 괴물 임박, 죄책감
+func _update_monologue(delta: float) -> void:
+	_mono_quiet_time += delta
+	# 와쳐가 시야(45) 안에 처음 들어올 때
+	if _watchers.nearest_real_dz() < 45.0:
+		_say("watcher")
+	# 러너가 막 돌진을 시작했을 때
+	if _movers.consume_runner_charged():
+		_say("runner")
+		_mono_quiet_time = 0.0
+	# 라디오 죽음의 주파수: 처음 켜질 때 / 30초 이상 방치
+	var on_death := _hud.get_radio_on_death()
+	if on_death and not _mono_prev_radio_death:
+		_mono_radio_death_time = 0.0
+		_say("radio_death_on")
+	elif on_death:
+		_mono_radio_death_time += delta
+		if _mono_radio_death_time >= 30.0:
+			_say("radio_death_long")
+	_mono_prev_radio_death = on_death
+	# 연료 40% / 15% — 스테이지당 1회씩
+	if _vehicle.fuel_ratio <= 0.40 and not _mono_fuel40_said:
+		_mono_fuel40_said = true
+		_say("fuel_40")
+	if _vehicle.fuel_ratio <= 0.15 and not _mono_fuel15_said:
+		_mono_fuel15_said = true
+		_say("fuel_15")
+	if _vehicle.fuel_ratio > 0.45:
+		_mono_fuel40_said = false
+		_mono_fuel15_said = false
+	# 괴물 임박 (상한의 20% 이내) — 진입 순간
+	var near := _monster_distance < MONSTER_MAX_DIST * 0.2
+	if near and not _mono_monster_near:
+		_say("monster_near")
+		_mono_quiet_time = 0.0
+	_mono_monster_near = near
+	# 죄책감 랜덤 발화: 조용한 구간(괴물 멀고, 창 없고, 점퍼 없음)
+	var quiet := _mono_quiet_time > 20.0 and not _spear.is_active() and not _jumper_on_hood \
+		and _monster_distance > MONSTER_MAX_DIST * 0.4
+	var g := _mono.tick_guilt(delta, _sanity_ratio, quiet)
+	if g != "":
+		_hud.show_subtitle(g, 3.2)
+		_mono_quiet_time = 0.0
+
 # ── 부적 효과 (Doc 28) ───────────────────────────────────────
 ## 부적 구성이 바뀌거나 스테이지가 시작될 때 파생 수치 재계산
 func _on_charms_updated() -> void:
@@ -1429,6 +1495,7 @@ func _update_charm_passives(delta: float) -> void:
 
 ## 환각 위협 충돌 공통 훅
 func _on_hallucination_collision() -> void:
+	_say("hallucination")
 	# cracked_hand_mirror: 환각 소멸 시 정신력 +5 (SANITY 3개 이상 +10)
 	if _charm_sys.has_charm("cracked_hand_mirror"):
 		_sanity_ratio += 0.10 if _charm_sys.count_tag("SANITY") >= 3 else 0.05
@@ -1539,7 +1606,7 @@ func _update_collapse_blackout(delta: float) -> void:
 		_collapse_rect.visible = false
 		_hud.force_death_frequency()
 		_hud.set_radio_locked(true)
-		_hud.show_subtitle("…라디오가… 안 돌아가.", 2.2)
+		_hud.show_message("…라디오가… 안 돌아가.", 2.2)   # 정신력 0에서도 보여야 하는 규칙 안내
 	else:
 		# 마지막 0.4초는 서서히 밝아짐
 		_collapse_rect.color.a = clampf(_collapse_blackout / 0.4, 0.0, 1.0)
@@ -1620,6 +1687,7 @@ func _on_jumper_boarded() -> void:
 	_jumper_on_hood = true
 	_jumper_escape_gauge = 0.0
 	_hud.set_jumper_on_hood(true)
+	_say("jumper_on")
 	# 점퍼 탑승 시 루팅 UI 강제 종료
 	if _loot_ui != null and _loot_ui.is_open():
 		_loot_ui.close()
@@ -1791,6 +1859,7 @@ func _on_menu_start() -> void:
 	
 	_reset_game()
 	_game_state = "playing"
+	_say("run_start")
 
 func _on_menu_upgrade() -> void:
 	_menu_container.visible = false
@@ -1820,6 +1889,11 @@ func _reset_game() -> void:
 	_stages_cleared_this_run = 0
 	_sanity_ratio = 1.0
 	_exit_collapse()
+	_mono.reset_run()
+	_mono_prev_radio_death = false
+	_mono_fuel40_said = false
+	_mono_fuel15_said = false
+	_mono_monster_near = false
 	# 부적은 런 단위 (Doc 28). 이전엔 리셋이 없어 다음 런으로 넘어오던 버그
 	_charm_sys.reset_run()
 	# first_luck 퍽: 런 시작 시 무작위 일반 부적 1개 즉시 장착
