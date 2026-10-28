@@ -136,8 +136,6 @@ func get_or_generate_wreck_state(wreck_seed: int, wreck_cols: int, wreck_rows: i
 	var result: Dictionary = {}
 	var occupied: Array = []
 	
-	dropped.insert(0, "big_engine") # 엔진 추가
-
 	# 크기 순으로 정렬
 	dropped.sort_custom(func(a, b):
 		var da = get_item_data(a).get("size", [1, 1])

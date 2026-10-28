@@ -352,7 +352,7 @@ func _make_slot(pos: Vector2, ptype: String, idx: int) -> Control:
 
 func _generate_shop_items() -> void:
 	_shop_items.clear()
-	var stock = ["fuel_can", "patch_kit", "cigarette", "big_engine", "spark_plug", "oil_filter"]
+	var stock = ["fuel_can", "patch_kit", "cigarette", "spark_plug", "oil_filter"]
 	for item_id in stock:
 		# 첫 번째로 들어갈 수 있는 빈 공간 찾기
 		for i in SHOP_COLS * SHOP_ROWS:

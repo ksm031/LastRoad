@@ -33,6 +33,7 @@ var _mono_fuel40_said : bool = false
 var _mono_fuel15_said : bool = false
 var _mono_monster_near : bool = false
 var _mono_quiet_time : float = 0.0   # 마지막 '사건' 이후 경과 (죄책감 발화 조건)
+var _loot_threat_timer : float = 0.0 # 수색 중 괴물 접근 들숨 간격
 var _camera   : Camera2D
 var _inv_mgr  : InventoryManager
 var _loot_ui  : LootUI
@@ -110,7 +111,10 @@ var _cigarette_recovery_timer: float = 0.0
 var _cigarette_recovery_amount: float = 0.0
 
 # ── 스테이지 진행 시스템 ─────────────────────────────────────
-const MONSTER_SPEEDS := [70.0, 80.0, 90.0, 100.0, 110.0, 120.0]  # 스테이지 1~6
+# 스테이지 1~6 괴물 속도. 고무줄 모델(상한 150)에서는 거리를 은행처럼 못 쌓으므로
+# 무업글 최고속(90)보다 10 이상 빠르면 풀스로틀로도 스테이지 안에 잡힌다 → 100을 천장으로.
+# 엔진 업글(+15/Lv)이 여유를 만든다. (이전 70~120은 5스테이지 무업글 확정 사망)
+const MONSTER_SPEEDS := [70.0, 76.0, 82.0, 88.0, 94.0, 100.0]
 const STAGE_LENGTH  := 600.0    # 각 스테이지 목표 거리 (세계 단위, 밸런스 조정용)
 const TOTAL_STAGES  := 6
 
@@ -645,6 +649,19 @@ func _process(delta: float) -> void:
 	_update_charm_passives(delta)
 	# ── 혼잣말 상황 감지 (Doc 26) ──
 	_update_monologue(delta)
+	# ── 수색 중 괴물 접근 청각 단서 ──
+	# 루팅 UI(레이어 12)가 미러·비네트를 가리므로, 정차 수색 중엔 소리로만 접근을 알 수 있어야 한다.
+	# 거리 비율 50% 아래부터 들숨이 들리고, 가까울수록 잦고 높아진다.
+	if _loot_ui != null and _loot_ui.is_open():
+		var ratio := _monster_distance / maxf(MONSTER_MAX_DIST, 1.0)
+		if ratio < 0.5:
+			_loot_threat_timer -= delta
+			if _loot_threat_timer <= 0.0:
+				var t := 1.0 - ratio / 0.5   # 0(멀다) ~ 1(코앞)
+				_hud.play_sfx("breath", lerpf(0.7, 1.4, t))
+				_loot_threat_timer = lerpf(4.0, 1.2, t)
+	else:
+		_loot_threat_timer = 0.0
 	
 	# 라디오 죽음의 주파수: 정신력 -2/초 (GDD 18-radio.md)
 	if _hud.get_radio_on_death():
@@ -1364,6 +1381,7 @@ func _apply_route_modifiers(route_type: String) -> void:
 	_jumpers.jiwon_info      = jiwon_info
 	_obstacles.SPACING_Z     = p["obstacle"]["spacing"]
 	_obstacles.SPAWN_CHANCE  = p["obstacle"]["chance"]
+	_obstacles.intro_clear_z = 70.0 if current_stage == 1 else 0.0   # 1스테이지 출발 직후엔 바위 없음
 	_obstacles.jiwon_info    = jiwon_info
 	_movers.SPACING_Z        = p["mover"]["spacing"]
 	_movers.SPAWN_CHANCE     = p["mover"]["chance"]
@@ -1375,7 +1393,7 @@ func _apply_route_modifiers(route_type: String) -> void:
 	var is_raining := route_type == "weather"
 	if is_raining:
 		_rain.start_rain()
-		_vehicle.traction_factor = 0.55 # 미끄러움
+		_vehicle.traction_factor = 0.7  # 미끄러움 (0.55는 고속 조향 둔화와 겹쳐 차선 변경 1.7초 — 회피 불가 수준)
 	else:
 		_rain.stop_rain()
 		_vehicle.traction_factor = 1.0
@@ -1881,6 +1899,8 @@ func _unhandled_input(event: InputEvent) -> void:
 
 	if event is InputEventKey and event.pressed and not event.echo:
 		match event.keycode:
+			KEY_F3:
+				_hud.toggle_debug_readout()
 			KEY_KP_0:
 				if _game_state == "playing":
 					_clear_sanity_effects()

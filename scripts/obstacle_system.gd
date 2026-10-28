@@ -7,6 +7,7 @@ var SPACING_Z        := 18.0    # 실제값은 spawn_config.gd에서 주입
 var SPAWN_CHANCE     := 0.25
 var seed_offset      := 0     # 스테이지마다 다른 배치를 위한 시드 오프셋
 var highlight        := false # old_wiper_motor 부적: 야광 강조 (game_world가 갱신)
+var intro_clear_z    := 0.0   # 이 거리 전에는 스폰하지 않음 (1스테이지 도입부 가속 직선 확보)
 const HIGHLIGHT_COLOR := Color(1.3, 1.5, 0.9, 1.0)
 const VISIBLE_DZ_MIN   := 0.35
 const VISIBLE_DZ_MAX   := 90.0
@@ -108,6 +109,8 @@ func _obstacle_at_k(k: int) -> Dictionary:
 	elif lane_r > 0.66: lane = 1
 	var jitter := (BillboardManager.get_rand01(k * 9876 + 233, seed_offset) - 0.5) * 0.15
 	var wz := float(k) * SPACING_Z + 10.0 + BillboardManager.get_rand01(k * 7919 + 203, seed_offset) * 8.0
+	if wz < intro_clear_z:
+		return {}
 	
 	if jiwon_info.has("wz"):
 		var j_wz: float = jiwon_info["wz"]

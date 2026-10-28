@@ -180,7 +180,8 @@ func _process(delta: float) -> void:
 	# 트렁크만 보는 모드이거나 수색이 완료되었으면 중단
 	if _is_trunk_only or _search_done: return
 
-	var loot_speed_mult := 1.25 if (meta and meta.has_perk("fast_loot")) else 1.0
+	# 퍽 id는 keen_eye_new ("갓길 수색 속도 +25%"). 'fast_loot'은 존재하지 않는 id였음
+	var loot_speed_mult := 1.25 if (meta and meta.has_perk("keen_eye_new")) else 1.0
 	if charm_sys and charm_sys.has_charm("bloody_coin"):
 		loot_speed_mult *= 2.0 # 피 묻은 동전: 수색 속도 2배
 

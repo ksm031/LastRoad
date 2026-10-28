@@ -1278,6 +1278,11 @@ func _update_radio_ticker(delta: float) -> void:
 		_radio_text_label.add_theme_color_override("font_color", Color(0.95, 0.80, 0.35, 0.9))
 		_radio_text_timer = 7.0
 
+## 좌상단 수치 판독(디버그) 토글
+func toggle_debug_readout() -> void:
+	if _hud_spd != null:
+		_hud_spd.visible = not _hud_spd.visible
+
 ## 라디오 줌(V) 중인지 — Doc 30 상호 잠금용
 func is_radio_zoomed() -> bool:
 	return _v_toggled
@@ -1388,6 +1393,7 @@ func _build_labels() -> void:
 	_hud_spd.position = Vector2(28, 24)
 	_hud_spd.add_theme_font_size_override("font_size", 22)
 	_hud_spd.add_theme_color_override("font_color", Color(0.9, 0.9, 0.7))
+	_hud_spd.visible = false   # F3로 토글 (toggle_debug_readout)
 	add_child(_hud_spd)
 
 	_hud_wealth = Label.new()
@@ -1799,9 +1805,10 @@ func update(speed: float, scroll_z: float, steering_angle: float, rpm: float, mo
 	
 	if _wheel != null:
 		_wheel.rotation = deg_to_rad(steering_angle)
-	if _hud_spd != null:
+	if _hud_spd != null and _hud_spd.visible:
+		# 디버그 판독용 (F3). Doc 01 필러 4 "화면이 나의 상태다" — 평소엔 숫자를 보여주지 않는다
 		var progress := clampf(stage_dist / stage_len, 0.0, 1.0) * 100.0
-		_hud_spd.text = "ST%d [%.0f%%]  |  %.0f km/h  |  연료: %.1f L  |  정신력: %.0f%%  |  괴물: %.1f" % [stage, progress, speed, fuel_ratio * 40.0, sanity_ratio * 100.0, monster_distance]
+		_hud_spd.text = "ST%d [%.0f%%]  |  %.0f km/h  |  연료: %.0f%%  |  정신력: %.0f%%  |  괴물: %.1f" % [stage, progress, speed, fuel_ratio * 100.0, sanity_ratio * 100.0, monster_distance]
 		
 	if _hud_wealth != null:
 		var money_str: String = ""
