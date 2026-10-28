@@ -34,6 +34,7 @@ var _mono_fuel15_said : bool = false
 var _mono_monster_near : bool = false
 var _mono_quiet_time : float = 0.0   # 마지막 '사건' 이후 경과 (죄책감 발화 조건)
 var _loot_threat_timer : float = 0.0 # 수색 중 괴물 접근 들숨 간격
+var _premonition_armed : bool = false # premonition 퍽 경고 1회성
 var _camera   : Camera2D
 var _inv_mgr  : InventoryManager
 var _loot_ui  : LootUI
@@ -346,11 +347,7 @@ func _ready() -> void:
 	_upgrades = VehicleUpgradeSystem.new()
 	add_child(_upgrades)
 	
-	# ── 퍽 효과 적용 (시작 정신력) ──
-	if _meta.has_perk("strong_heart"):
-		_sanity_ratio = 1.15
-	else:
-		_sanity_ratio = 1.0
+	_sanity_ratio = 1.0   # (구 strong_heart 퍽은 스킬트리에 없어 제거)
 	_skill_tree_ui = _SkillTreeScript.new()
 	_skill_tree_ui.meta = _meta
 	_skill_tree_ui.closed.connect(_on_skill_tree_closed)
@@ -600,6 +597,10 @@ func _process(delta: float) -> void:
 		_state_timer = 0.0
 		_hud.show_gameover()
 		_hud.set_mirror_alert(false)
+		# legacy 퍽: 사망 시 소지 자금 30%를 다음 런으로
+		if _meta.has_perk("legacy"):
+			_meta.carry_money = int(_inv_mgr.money * 0.3)
+			_meta.save_data()
 		_hud.stop_engine_sound()
 		if _collapse_rect != null:
 			_collapse_rect.visible = false
@@ -752,11 +753,11 @@ func _process(delta: float) -> void:
 		_rain._shader_mat.set_shader_parameter("cam_center_uv", _camera.position / Vector2(BillboardManager.SCREEN_W, BillboardManager.SCREEN_H))
 		_rain._shader_mat.set_shader_parameter("cam_zoom", _camera.zoom.x)
 	# ── 정신력 기반 왜곡 및 무채색화 ──
-	var threshold_p := 0.30 if (_meta.has_perk("reality") or _meta.has_perk("reality_sense")) else 0.40
+	var threshold_p := 0.30 if _meta.has_perk("reality_sense") else 0.40
 	var dist_strength_p := 0.0
 	if _sanity_ratio < threshold_p:
 		dist_strength_p = (threshold_p - _sanity_ratio) / threshold_p
-		if _meta.has_perk("unyielding") or _meta.has_perk("last_resort"): # last_resort가 unyielding 대체할 수도 있음
+		if _meta.has_perk("last_resort"):
 			dist_strength_p *= 0.70
 
 	# ── 정신력 기반 무채색화 (Desaturation) ──
@@ -945,10 +946,8 @@ func _process(delta: float) -> void:
 		_sanity_ratio = clampf(_sanity_ratio, 0.0, 1.0)
 
 		# 탈출: 임계 속도 이상을 hold_target초 유지하면 점퍼 분리
-		# fast_react 퍽은 필요한 유지 시간을 단축 (1.25배 빠름)
 		var esc_threshold: float = _vehicle.get_kill_threshold(JUMPER_KILL_THRESHOLD)
-		var react_mult: float = 1.25 if _meta.has_perk("fast_react") else 1.0
-		var hold_target: float = JUMPER_ESCAPE_HOLD / react_mult
+		var hold_target: float = JUMPER_ESCAPE_HOLD   # (구 fast_react 퍽은 스킬트리에 없어 제거)
 		if _vehicle.speed >= esc_threshold:
 			_jumper_escape_gauge += delta
 		else:
@@ -1311,6 +1310,13 @@ func _on_shop_depart_requested(route_type: String) -> void:
 	_loot_ui.close()
 	_hud.hide_loot_prompt()
 
+	# hidden_route 퍽: 스테이지 이동 시 무작위 아이템 1개 파밍
+	if _meta.has_perk("hidden_route"):
+		var finds := ["scrap", "aluminum", "copper_wire", "canned_food", "cigarette", "fuel_can", "flashlight"]
+		var found: String = finds[randi() % finds.size()]
+		if _inv_mgr.trunk_add(found) >= 0:
+			_hud.show_message("숨겨진 경로에서 %s 발견" % str(_inv_mgr.get_item_data(found).get("name", found)))
+
 	# 완전히 새로운 스테이지로 달리기 위해 거리·위치 초기화
 	_vehicle.scroll_z = 0.0
 	_vehicle.cam_x = 0.0
@@ -1648,6 +1654,15 @@ func _update_charm_passives(delta: float) -> void:
 	# broken_speedometer: 가속 중 라디오 조작 불가 (SPEED 3개 이상이면 무효)
 	var w_held := Input.is_key_pressed(KEY_W) or Input.is_action_pressed("ui_up")
 	_hud.radio_input_blocked = _charm_sys.has_charm("broken_speedometer") and w_held and _charm_sys.count_tag("SPEED") < 3
+	# premonition 퍽: 사슴머리/도망자 출현 ~3초(20유닛) 전 경고 (나침반 대신 미러 펄스 + 저음)
+	if _meta.has_perk("premonition"):
+		var imminent := _deer.is_near(20.0) or _movers.fleeing_ahead_within(20.0)
+		if imminent and not _premonition_armed:
+			_premonition_armed = true
+			_hud.play_sfx("warning", 0.5)
+			_hud.show_message("…예감.", 1.2)
+		elif not imminent:
+			_premonition_armed = false
 	# backward_radio: 죽음의 주파수 청취 중 창 발동 5초 전 라디오가 미리 흘린다
 	if _charm_sys.has_charm("backward_radio") and _hud.get_radio_on_death():
 		if _spear.phase == "idle" and _spear.is_armed() and _spear.seconds_to_next() <= 5.0:
@@ -2054,7 +2069,8 @@ func _on_skill_tree_closed() -> void:
 func _reset_game() -> void:
 	# 차량 및 메타 상태 초기화 (세션 기반)
 	_upgrades.reset_upgrades()
-	_inv_mgr.money = 0
+	_inv_mgr.money = _meta.carry_money   # legacy 퍽 인계분 (없으면 0)
+	_meta.carry_money = 0
 	_inv_mgr.trunk.fill("")
 	
 	_vehicle.apply_upgrades(_upgrades, _meta)

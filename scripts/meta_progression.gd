@@ -64,6 +64,7 @@ var true_ending_clear: bool = false
 var fleeing_hit_count: int = 0
 var a_ending_count: int = 0
 var total_runs: int = 0        # 시작한 런 수 (라디오 죽음의 주파수 단계: 1~3 초기 / 4~6 중기)
+var carry_money: int = 0       # legacy 퍽: 다음 런으로 인계할 자금
 var full_clears: int = 0       # 6스테이지 완주 횟수 (Doc 25 컷신 회차)
 
 func _ready() -> void:
@@ -147,6 +148,7 @@ func save_data() -> void:
 		"a_ending_count": a_ending_count,
 		"total_runs": total_runs,
 		"full_clears": full_clears,
+		"carry_money": carry_money,
 	}
 	f.store_string(JSON.stringify(data))
 	f.close()
@@ -178,6 +180,7 @@ func load_data() -> void:
 		a_ending_count = int(data.get("a_ending_count", 0))
 		total_runs = int(data.get("total_runs", 0))
 		full_clears = int(data.get("full_clears", 0))
+		carry_money = int(data.get("carry_money", 0))
 
 func _find_perk(perk_id: String) -> Dictionary:
 	for p in PERKS:

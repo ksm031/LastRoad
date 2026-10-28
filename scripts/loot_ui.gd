@@ -120,6 +120,8 @@ func open_wreck(wreck_seed: int) -> void:
 		_wreck_grid_parent.position.y = 0.0
 
 	_wreck_rows = 10 + (wreck_seed % 7)   # 10~16행
+	if meta and meta.has_perk("deeper_shoulder"):
+		_wreck_rows += 1   # 비밀 슬롯 1행 추가
 	_active_state = inv.get_or_generate_wreck_state(wreck_seed, _wreck_cols, _wreck_rows)
 	_wreck_items = _active_state["items"]
 	_revealed = _active_state["revealed"]

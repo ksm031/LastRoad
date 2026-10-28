@@ -257,6 +257,21 @@ func _cult_member_lane(o: Dictionary, i: int) -> float:
 static func _hit_key(k: int, i: int) -> int:
 	return k * 16 + i
 
+## 아직 나타나지 않은 도망자가 전방 dz 안에 예정되어 있는가 (premonition 퍽)
+func fleeing_ahead_within(dz_max: float) -> bool:
+	var k0 := int(floor((scroll_z - WZ_BASE_OFFSET) / SPACING_Z))
+	var k1 := int(ceil((scroll_z + dz_max - WZ_BASE_OFFSET) / SPACING_Z)) + 1
+	for k in range(k0, k1 + 1):
+		var o := _mover_at_k(k)
+		if o.is_empty() or int(o["type"]) != MoverType.FLEEING:
+			continue
+		if _flee.has(k):
+			continue
+		var dz := float(o["wz"]) - scroll_z
+		if dz > 0.0 and dz <= dz_max:
+			return true
+	return false
+
 ## 사슴머리 저속 통과 등: 반경 안의 러너·앰부서를 즉시 활성화
 func force_activate_near(z: float, radius: float) -> void:
 	var k0 := int(floor((z - WZ_BASE_OFFSET) / SPACING_Z)) - 1

@@ -1270,7 +1270,11 @@ func _update_radio_ticker(delta: float) -> void:
 		hits = meta.fleeing_hit_count
 		late = meta.locked_slot_unlocked
 	if _radio_on_death:
-		_radio_text_label.text = _radio_scripts.next_death(runs, late)
+		var dl := _radio_scripts.next_death(runs, late)
+		# radio_secret 퍽 없으면 명료도 낮음: 절반은 잡음으로 묻힌다
+		if meta != null and not meta.has_perk("radio_secret") and randf() < 0.5:
+			dl = "(지직… …직… …)"
+		_radio_text_label.text = dl
 		_radio_text_label.add_theme_color_override("font_color", Color(0.95, 0.40, 0.35, 0.9))
 		_radio_text_timer = 3.5
 	else:
