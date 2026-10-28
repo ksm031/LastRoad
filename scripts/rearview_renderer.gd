@@ -12,6 +12,7 @@ const COL_SKY       := Color(0.12, 0.14, 0.18, 1.0)
 var scroll_z : float = 0.0
 var _wendigo : Sprite2D
 var _monster_distance : float = 200.0
+var max_dist : float = 150.0   # 이 거리에서 지평선 크기. game_world.MONSTER_MAX_DIST와 동기화
 var _anim_time : float = 0.0
 
 # 나무 렌더링 관련
@@ -51,8 +52,10 @@ func update_state(p_scroll_z: float, monster_dist: float, delta: float, zoomed: 
 		var total_frames := _wendigo.hframes * _wendigo.vframes
 		_wendigo.frame = int(_anim_time) % total_frames
 
-		var dist_t := clampf(_monster_distance / 60.0, 0.0, 1.0)
-		var visual_depth := lerpf(2.5, 0.08, pow(dist_t, 0.8))
+		# 상한 거리에서도 지평선에 작게 보이도록 (고무줄 모델: 괴물은 항상 미러 안에 있다)
+		# pow 0.6 → 멀 때 크기 변화가 완만하고, 가까워질수록 급격히 커짐
+		var dist_t := clampf(_monster_distance / maxf(max_dist, 1.0), 0.0, 1.0)
+		var visual_depth := lerpf(2.5, 0.06, pow(dist_t, 0.6))
 
 		var ground_y := BillboardManager.HORIZON_Y + visual_depth * (BillboardManager.ROAD_BOTTOM_Y - BillboardManager.HORIZON_Y)
 

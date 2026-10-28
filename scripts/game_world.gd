@@ -60,7 +60,15 @@ var _combo_window : float = 4.0    # 콤보 유지 한계(초). §7 '검은 장�
 
 var _prev_steering : float = 0.0
 
-var _monster_distance: float = 350.0  # 초기 괴물 간격 (세계 단위)
+# ── 괴물 추격: 고무줄 모델 ────────────────────────────────────
+# 거리를 크게 벌어두는 '은행' 구조 대신, 항상 백미러 사정권 안에서
+# 정차하면 즉시 좁혀지고 밟으면 금방 다시 벌어지는 구조.
+# 결정(정차·바위)의 대가가 수 분 뒤가 아니라 10초 안에 화면에 나타나야 한다.
+# 세 값 모두 디버그 키(KP5~KP8)로 실시간 조정 가능 → 플레이테스트 후 const로 고정
+var MONSTER_START_DIST : float = 100.0  # 스테이지 시작 시 거리 (세계 단위)
+var MONSTER_MAX_DIST   : float = 150.0  # 거리 상한. 이 이상 벌어지지 않음 (은행 금지)
+var MONSTER_GAIN_K     : float = 0.10   # 속도차(km/h) → 거리 변화 계수 (/초)
+var _monster_distance: float = 100.0  # 현재 괴물 간격 (세계 단위)
 var _sanity_ratio: float = 1.0        # 정신력 (1.0 = 정상, 0.0 = 패닉)
 var _weathered_pebble_timer: float = 0.0
 var _cigarette_recovery_timer: float = 0.0
@@ -228,6 +236,7 @@ func _ready() -> void:
 	_rain_layer.add_child(_rain)
 	_hud  = _HudScript.new();       add_child(_hud)
 	_hud.loot_prompt_clicked.connect(_on_loot_prompt_clicked)
+	_apply_monster_max_dist()  # 백미러 괴물 스케일을 거리 상한과 동기화
 
 	# ── 인벤토리 / 루팅 UI ──
 	# ── 메타 진행 / 강화 (가장 먼저!) ──
@@ -482,8 +491,8 @@ func _process(delta: float) -> void:
 			monster_speed *= 0.7 # 30% 느려짐
 			
 		var speed_diff := _vehicle.speed - monster_speed
-		_monster_distance += speed_diff * 0.05 * delta
-		_monster_distance = maxf(_monster_distance, 0.0)
+		_monster_distance += speed_diff * MONSTER_GAIN_K * delta
+		_monster_distance = clampf(_monster_distance, 0.0, MONSTER_MAX_DIST)
 	
 	# ── 게임오버 체크: 괴물에게 따라잡힘 ──
 	if _monster_distance <= 0.0:
@@ -969,7 +978,7 @@ func _advance_to_next_stage() -> void:
 	_exit_car_dz = 2.0
 	_exit_cam_tilt = 0.0
 	_road.show_headlight = false
-	_monster_distance += 100.0  # 스테이지 클리어 안전 버퍼
+	_monster_distance = MONSTER_START_DIST  # 스테이지 간 거리 초기화 (02-core-loop: 괴물 거리 초기화)
 
 	# HUD 숨기기 + 카메라 리셋
 	_hud.visible = false
@@ -1303,6 +1312,36 @@ func _unhandled_input(event: InputEvent) -> void:
 			KEY_KP_SUBTRACT:
 				_sanity_ratio = clampf(_sanity_ratio - 0.10, 0.0, 1.0)
 				print("[DEBUG] 디버그 치트: 정신력 -10% 감소 (현재: ", int(_sanity_ratio * 100.0), "%)")
+			# ── 괴물 고무줄 튜닝 (플레이테스트용) ──
+			KEY_KP_5:
+				MONSTER_MAX_DIST = maxf(MONSTER_MAX_DIST - 10.0, 30.0)
+				_apply_monster_max_dist()
+				_print_monster_tuning()
+			KEY_KP_6:
+				MONSTER_MAX_DIST += 10.0
+				_apply_monster_max_dist()
+				_print_monster_tuning()
+			KEY_KP_7:
+				MONSTER_GAIN_K = maxf(MONSTER_GAIN_K - 0.01, 0.01)
+				_print_monster_tuning()
+			KEY_KP_8:
+				MONSTER_GAIN_K += 0.01
+				_print_monster_tuning()
+			KEY_KP_9:
+				_monster_distance = MONSTER_START_DIST
+				print("[DEBUG] 괴물 거리 리셋 → ", _monster_distance)
+
+func _apply_monster_max_dist() -> void:
+	_monster_distance = minf(_monster_distance, MONSTER_MAX_DIST)
+	if _hud != null and _hud._rearview_node != null:
+		_hud._rearview_node.max_dist = MONSTER_MAX_DIST
+
+func _print_monster_tuning() -> void:
+	var m_spd := float(MONSTER_SPEEDS[clampi(current_stage - 1, 0, TOTAL_STAGES - 1)])
+	print("[DEBUG] 괴물 튜닝  상한=%.0f  계수=%.2f  | 정차 시 상한→0까지 %.1f초  | %.0fkm/h 순항 시 +%.1f/초" % [
+		MONSTER_MAX_DIST, MONSTER_GAIN_K,
+		MONSTER_MAX_DIST / maxf(m_spd * MONSTER_GAIN_K, 0.001),
+		_vehicle.max_speed, (_vehicle.max_speed - m_spd) * MONSTER_GAIN_K])
 
 # ── 메인 메뉴 ────────────────────────────────────────────────────
 func _build_main_menu() -> void:
@@ -1411,7 +1450,7 @@ func _reset_game() -> void:
 	# 게임 진행 초기화
 	current_stage = 1
 	stage_start_z = 0.0
-	_monster_distance = 350.0
+	_monster_distance = MONSTER_START_DIST
 	_stages_cleared_this_run = 0
 	_sanity_ratio = 1.0
 	_cigarette_recovery_timer = 0.0
