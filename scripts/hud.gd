@@ -1678,7 +1678,10 @@ func show_stage_clear(stage: int, is_final: bool) -> void:
 	_gameover_overlay.color = Color(0.0, 0.0, 0.0, 0.7)
 	_center_label.visible = true
 	if is_final:
-		_center_label.text = "STAGE %d CLEAR\n\n...목적지에 도달했다." % stage
+		# 일반 종료 연출은 game_world가 자막으로 진행한다. 라벨은 비우되 공백 한 칸 —
+		# set_gameover_fade가 빈 라벨에 GAME OVER를 쓰는 것을 막기 위해
+		_center_label.text = " "
+		_gameover_overlay.color = Color(0.0, 0.0, 0.0, 0.0)
 	else:
 		_center_label.text = "STAGE %d CLEAR\n\n다음 구간으로 이동 중..." % stage
 	_center_label.add_theme_font_size_override("font_size", 42)

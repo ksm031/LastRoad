@@ -120,6 +120,15 @@ var _state_timer      : float = 0.0
 const STAGE_CLEAR_DURATION := 3.0
 const GAMEOVER_FADE_DURATION := 1.5
 const RETURN_TO_MENU_DELAY := 4.0   # 게임오버/클리어 후 메뉴 복귀까지 대기 시간
+const LOOP_ENDING_DURATION := 12.0  # 일반 종료 연출 길이 (Doc 11 엔딩 분기 — 루프 암시)
+# 일반 종료 연출 대본: [시각(초), 문구]. 진엔딩 퍽 해금 전에는 이것뿐이다
+const LOOP_ENDING_SCRIPT := [
+	[1.5, "...도착했다."],
+	[4.5, "...아니."],
+	[7.0, "...길이 계속된다."],
+	[9.5, "...또 시작이네."],
+]
+var _loop_ending_idx: int = 0
 
 # ── 메인 메뉴 ──
 var _menu_layer : CanvasLayer
@@ -504,8 +513,10 @@ func _process(delta: float) -> void:
 		return
 
 	if _game_state == "stage_clear":
+		# 6스테이지 클리어 = 일반 종료 (Doc 11: 진엔딩 퍽 전에는 루프 지속을 암시하는 페이드아웃)
 		_state_timer += delta
-		if _state_timer >= RETURN_TO_MENU_DELAY:
+		_update_loop_ending(delta)
+		if _state_timer >= LOOP_ENDING_DURATION:
 			_show_main_menu()
 		return
 	
@@ -588,10 +599,15 @@ func _process(delta: float) -> void:
 		_say("maintenance")
 
 		if current_stage >= TOTAL_STAGES:
-			# 최종 스테이지 클리어 = 엔딩
+			# 최종 스테이지 클리어 = 일반 종료 연출 (진엔딩은 Doc 22, 미구현)
 			_game_state = "stage_clear"
 			_state_timer = 0.0
+			_loop_ending_idx = 0
+			_vehicle.speed = 0.0
+			_hud.stop_engine_sound()
+			_hud.set_mirror_alert(false)
 			_hud.show_stage_clear(current_stage, true)
+			_hud.set_gameover_fade(0.0)
 		else:
 			_advance_to_next_stage()
 		return
@@ -1405,6 +1421,19 @@ func _update_backdrops(delta: float) -> void:
 	_forest_scroll += forest_delta
 	_apply_bg_scroll()
 
+
+# ── 일반 종료 연출 (Doc 11) ──────────────────────────────────
+## 서서히 어두워지며 혼잣말 4줄. 마지막 줄이 런 시작 대사와 같다 — 루프.
+func _update_loop_ending(_delta: float) -> void:
+	var fade := clampf((_state_timer - 1.0) / (LOOP_ENDING_DURATION - 2.5), 0.0, 1.0)
+	_hud.set_gameover_fade(fade)
+	if _loop_ending_idx < LOOP_ENDING_SCRIPT.size():
+		var row: Array = LOOP_ENDING_SCRIPT[_loop_ending_idx]
+		if _state_timer >= float(row[0]):
+			_loop_ending_idx += 1
+			_hud.show_message(str(row[1]), 2.4)
+			if _loop_ending_idx == LOOP_ENDING_SCRIPT.size():
+				_hud.play_sfx("breath", 0.7)
 
 # ── 혼잣말 (Doc 26) ───────────────────────────────────────────
 ## 상황 대사 시도. 침묵/쿨다운이면 아무것도 안 함
