@@ -174,6 +174,10 @@ func _watcher_at_k(k: int) -> Dictionary:
 		if k == FIRST_WATCHER_K + 1:
 			return {}
 
+	# Doc 30 §5 숨 비트 구역에는 적을 놓지 않는다
+	if not PressureDirector.can_spawn_at(wz):
+		return {}
+
 	var r := BillboardManager.get_rand01(k * 13331 + 7, seed_offset)
 	var eff_chance := SPAWN_CHANCE
 	if intro_tuning:

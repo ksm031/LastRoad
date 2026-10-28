@@ -726,7 +726,10 @@ func _process(delta: float) -> void:
 	# ── 창 던지기 (Doc 08) — Doc 30 §4 상호 잠금: 점퍼 탑승·인벤토리·라디오 줌 중엔 신규 발동 보류 ──
 	var spear_blocked := _jumper_on_hood \
 		or (_loot_ui != null and _loot_ui.is_open()) \
-		or _hud.is_radio_zoomed()
+		or _hud.is_radio_zoomed() \
+		or PressureDirector.in_breath(_vehicle.scroll_z) \
+		or PressureDirector.near_stage_end(_vehicle.scroll_z) \
+		or _collapse_blackout > 0.0
 	_spear.update_state(delta, current_stage, _monster_distance, MONSTER_MAX_DIST, _vehicle, curve_x, hill_px, spear_blocked)
 	var spear_mirror := _spear.get_mirror_state()
 	if _hud._rearview_node != null:
@@ -1250,6 +1253,9 @@ func _apply_route_modifiers(route_type: String) -> void:
 	_blood_orbs.SPACING_Z = 32.0 / bo_scale
 	_blood_orbs.SPAWN_CHANCE = clampf(0.38 + float(current_stage) * 0.06, 0.38, 0.72)
 	_jiwons.seed_offset     = stage_seed + 55555
+
+	# Doc 30: 숨 비트 구역 배치 — 스폰 파라미터보다 먼저 (각 시스템이 참조)
+	PressureDirector.setup_stage(current_stage, STAGE_LENGTH, stage_seed)
 
 	# 스폰 파라미터 — spawn_config.gd 에서 일괄 계산
 	var p := SpawnConfig.get_params(route_type, current_stage)

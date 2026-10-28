@@ -166,7 +166,10 @@ func _jumper_at_k(k: int) -> Dictionary:
 		return {}
 	var lane := int(floor(BillboardManager.get_rand01(k * 17239 + 67, seed_offset) * 3.0)) - 1
 	var wz := float(k) * SPACING_Z + 15.0 + BillboardManager.get_rand01(k * 17239 + 113, seed_offset) * 15.0
-	
+	# Doc 30 §5 숨 비트 구역 제외
+	if not PressureDirector.can_spawn_at(wz):
+		return {}
+
 	if jiwon_info.has("wz"):
 		var j_wz: float = jiwon_info["wz"]
 		var j_lane: int = jiwon_info["lane"]

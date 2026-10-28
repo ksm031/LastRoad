@@ -108,6 +108,9 @@ func _mover_at_k(k: int) -> Dictionary:
 	var wz := float(k) * SPACING_Z + WZ_BASE_OFFSET + BillboardManager.get_rand01(k * 7187 + 31, seed_offset) * WZ_MAX_JITTER
 	if BillboardManager.get_rand01(k * 7187 + 3, seed_offset) > SPAWN_CHANCE:
 		return {}
+	# Doc 30 §5 숨 비트 구역 / §6 정비 직전 보류
+	if not PressureDirector.can_spawn_at(wz) or wz >= PressureDirector.stage_len - PressureDirector.END_HOLD_UNITS:
+		return {}
 	var can_runner := stage >= RUNNER_MIN_STAGE
 	var can_walker := stage >= WALKER_MIN_STAGE
 	if not can_runner and not can_walker:
@@ -151,7 +154,11 @@ func _update_runners(delta: float) -> void:
 			continue
 		if dz <= RUNNER_TRIGGER_DZ:
 			if not _runner_lane.has(k):
+				# Doc 30 §3: 같은 채널(시각+인지) 스파이크가 진행 중이면 돌진을 미룬다
+				if PressureDirector.spike_active():
+					continue
 				_runner_lane[k] = float(o["side"]) * RUNNER_START_LANE
+				PressureDirector.register_spike(2.5)
 			# 차의 현재 차선을 향해 일정 속도로 이동 (추적 지연 = 회피 창)
 			var cur := float(_runner_lane[k])
 			_runner_lane[k] = move_toward(cur, cam_x, RUNNER_LANE_SPEED * delta)

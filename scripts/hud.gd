@@ -1254,9 +1254,16 @@ func update_radio_for_stage(stage: int, stage_len: float = 600.0) -> void:
 	_radio_step = c  # 안전 주파수 중앙으로 라디오 세팅
 
 	# 스테이지 내 2회 변경 타이밍 예약 (전반/후반에 각 1회씩 랜덤)
-	var t1 := randf_range(0.20, 0.45) * stage_len
-	var t2 := randf_range(0.55, 0.82) * stage_len
+	# Doc 30 §5: 숨 비트 구역 안에 떨어지면 구역 끝으로 미룬다
+	var t1 := _avoid_breath(randf_range(0.20, 0.45) * stage_len)
+	var t2 := _avoid_breath(randf_range(0.55, 0.82) * stage_len)
 	_safe_change_sched = [t1, t2]
+
+func _avoid_breath(z: float) -> float:
+	for zone in PressureDirector.breath_zones:
+		if z >= float(zone[0]) and z <= float(zone[1]):
+			return float(zone[1]) + 5.0
+	return z
 
 	_update_radio_display()
 

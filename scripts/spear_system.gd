@@ -61,6 +61,8 @@ var _double_timer   : float = 0.0
 var _stage     : int = 1
 var _rng       := RandomNumberGenerator.new()
 
+var _adaptive_rate_mult : float = 1.0   # Doc 30 §6 적응형 압박 (game_world가 갱신)
+
 # 투영 입력 (전방 비행 렌더용)
 var _cam_x    : float = 0.0
 var _curve_x  : PackedFloat32Array = PackedFloat32Array()
@@ -118,6 +120,7 @@ func update_state(delta: float, stage: int, monster_dist: float, monster_max: fl
 	_cam_x = vehicle.cam_x
 	_curve_x = p_curve_x
 	_hill_px = p_hill_px
+	_adaptive_rate_mult = PressureDirector.spear_rate_mult(vehicle)
 
 	if phase == "idle":
 		_update_cooldown(delta, monster_dist, monster_max, blocked)
@@ -161,6 +164,7 @@ func _update_cooldown(delta: float, monster_dist: float, monster_max: float, blo
 		return
 	if blocked:
 		return
+	var rate_mult := _adaptive_rate_mult
 	# 2연발 대기 중이면 거리 무관하게 짧은 타이머로 발사
 	if _double_timer > 0.0:
 		_double_timer -= delta
@@ -176,8 +180,12 @@ func _update_cooldown(delta: float, monster_dist: float, monster_max: float, blo
 		rate = 2.0
 	elif ratio < DIST_DANGER:
 		rate = 1.5
-	_cooldown -= delta * rate
+	_cooldown -= delta * rate * rate_mult
 	if _cooldown <= 0.0:
+		# Doc 30: 다른 시각+인지 스파이크 진행 중이면 양보 (쿨다운은 0에 머물다 바로 발동)
+		if PressureDirector.spike_active():
+			_cooldown = 0.0
+			return
 		_start_throw(true)
 
 func _start_throw(allow_double: bool) -> void:
@@ -185,6 +193,8 @@ func _start_throw(allow_double: bool) -> void:
 	_windup_dur = float(row[0])
 	_cooldown   = float(row[1]) * _rng.randf_range(0.85, 1.15)
 	side = 1 if _rng.randf() < 0.5 else -1
+	# 창 시퀀스 전체(경고~명중 판정)를 시각+인지 스파이크로 등록
+	PressureDirector.register_spike(WARN_DUR + _windup_dur + THROW_DUR + APPROACH_DUR)
 	_fake = _rng.randf() < float(row[3])
 	_fake_switched = false
 	# 페이크면 처음엔 반대 손을 보여준다
