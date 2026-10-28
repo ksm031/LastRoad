@@ -63,6 +63,8 @@ var corpse_disposed: bool = false
 var true_ending_clear: bool = false
 var fleeing_hit_count: int = 0
 var a_ending_count: int = 0
+var total_runs: int = 0        # 시작한 런 수 (라디오 죽음의 주파수 단계: 1~3 초기 / 4~6 중기)
+var full_clears: int = 0       # 6스테이지 완주 횟수 (Doc 25 컷신 회차)
 
 func _ready() -> void:
 	load_data()
@@ -143,6 +145,8 @@ func save_data() -> void:
 		"true_ending_clear": true_ending_clear,
 		"fleeing_hit_count": fleeing_hit_count,
 		"a_ending_count": a_ending_count,
+		"total_runs": total_runs,
+		"full_clears": full_clears,
 	}
 	f.store_string(JSON.stringify(data))
 	f.close()
@@ -172,6 +176,8 @@ func load_data() -> void:
 		true_ending_clear = bool(data.get("true_ending_clear", false))
 		fleeing_hit_count = int(data.get("fleeing_hit_count", 0))
 		a_ending_count = int(data.get("a_ending_count", 0))
+		total_runs = int(data.get("total_runs", 0))
+		full_clears = int(data.get("full_clears", 0))
 
 func _find_perk(perk_id: String) -> Dictionary:
 	for p in PERKS:

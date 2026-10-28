@@ -37,6 +37,10 @@ const ITEM_DB := {
 	"gold_ring":   {"name": "금반지",         "type": "junk",       "value": 20000, "color": Color(0.94, 0.78, 0.00)},
 	"mil_supply":  {"name": "군용물자",       "type": "junk",       "value": 25000, "color": Color(0.35, 0.55, 0.27), "size": [1, 1]},
 	"big_engine":  {"name": "대형 엔진(테스트)", "type": "part",       "value": 50000, "color": Color(0.90, 0.20, 0.20), "size": [3, 2]},
+	# 도망자 소지품 (Doc 19 §도망자 드롭) — 전투 보상이 아닌 개인 물건
+	"photo":       {"name": "사진 한 장",     "type": "junk",       "value": 500,   "color": Color(0.85, 0.80, 0.70)},
+	"prescription":{"name": "처방전",         "type": "junk",       "value": 1000,  "color": Color(0.90, 0.90, 0.95)},
+	"key_ring":    {"name": "열쇠 묶음",      "type": "junk",       "value": 800,   "color": Color(0.70, 0.65, 0.40)},
 }
 
 func _ready() -> void:

@@ -23,6 +23,8 @@ var _jumpers  : LastRoadJumpers
 var _spear    : LastRoadSpear       # 창 던지기 (Doc 08)
 var _movers   : LastRoadMovers      # 러너·워커 (Doc 19)
 # ── 혼잣말 (Doc 26) ──
+var _deer     : LastRoadDeer        # 사슴머리 (Doc 06/19, 스테이지 6)
+var _deer_desat_pulse : float = 0.0 # 통과 순간 채도 급락 잔여
 var _mono     : MonologueSystem = MonologueSystem.new()
 var _mono_prev_radio_death : bool = false
 var _mono_radio_death_time : float = 0.0
@@ -193,6 +195,7 @@ const _ScavengingScript = preload("res://scripts/scavenging_system.gd")
 const _JumperScript  = preload("res://scripts/jumper_system.gd")
 const _SpearScript   = preload("res://scripts/spear_system.gd")
 const _MoverScript   = preload("res://scripts/mover_system.gd")
+const _DeerScript    = preload("res://scripts/deer_system.gd")
 const _InvMgrScript  = preload("res://scripts/inventory_manager.gd")
 const _LootUIScript  = preload("res://scripts/loot_ui.gd")
 const _ShopUIScript  = preload("res://scripts/shop_ui.gd")
@@ -267,6 +270,11 @@ func _ready() -> void:
 	_movers = _MoverScript.new()
 	_movers.billboard_mgr = _billboard_mgr
 	add_child(_movers)
+
+	_deer = _DeerScript.new()
+	_deer.billboard_mgr = _billboard_mgr
+	_deer.deer_passed.connect(_on_deer_passed)
+	add_child(_deer)
 
 	_build_collapse_overlay()
 
@@ -529,6 +537,11 @@ func _process(delta: float) -> void:
 		return
 
 	# ── playing 상태 ──
+	# 도망자 충돌 화면 컷 (0.2초)
+	if _screen_cut_timer > 0.0:
+		_screen_cut_timer -= delta
+		if _screen_cut_timer <= 0.0 and not _collapsed:
+			_collapse_rect.visible = false
 	if _collapse_blackout > 0.0:
 		_update_collapse_blackout(delta)   # 암전 중: 조작 불가, 차는 관성으로 감속
 	else:
@@ -737,6 +750,11 @@ func _process(delta: float) -> void:
 		var t := (10.0 - s_pct) / 10.0
 		desat_val = lerpf(0.85, 0.95, t)
 
+	# 사슴머리 통과: 채도 급락 후 서서히 회복 (속도가 낮을수록 깊게)
+	if _deer_desat_pulse > 0.0:
+		_deer_desat_pulse = maxf(_deer_desat_pulse - delta * 0.35, 0.0)
+		desat_val = maxf(desat_val, _deer_desat_pulse)
+
 	if _pp_mat != null:
 		var max_dist_offset := 12.0
 		var cur_offset := dist_strength_p * max_dist_offset
@@ -755,6 +773,7 @@ func _process(delta: float) -> void:
 	_jiwons.update_state(_vehicle.scroll_z, _vehicle.cam_x, curve_x, hill_px, _vehicle.headlight_range)
 	_jumpers.update_state(_vehicle.scroll_z, _vehicle.cam_x, curve_x, hill_px, _vehicle.headlight_range)
 	_movers.update_state(_vehicle.scroll_z, _vehicle.cam_x, curve_x, hill_px, _vehicle.headlight_range)
+	_deer.update_state(_vehicle.scroll_z, _vehicle.cam_x, curve_x, hill_px, _vehicle.headlight_range, _vehicle.speed, delta)
 
 	# ── 창 던지기 (Doc 08) — Doc 30 §4 상호 잠금: 점퍼 탑승·인벤토리·라디오 줌 중엔 신규 발동 보류 ──
 	var spear_blocked := _jumper_on_hood \
@@ -762,7 +781,8 @@ func _process(delta: float) -> void:
 		or _hud.is_radio_zoomed() \
 		or PressureDirector.in_breath(_vehicle.scroll_z) \
 		or PressureDirector.near_stage_end(_vehicle.scroll_z) \
-		or _collapse_blackout > 0.0
+		or _collapse_blackout > 0.0 \
+		or _deer.is_near() or _deer.recent_pass_timer > 0.0   # Doc 30 §4: 사슴머리 통과 전후 창 보류
 	_spear.update_state(delta, current_stage, _monster_distance, MONSTER_MAX_DIST, _vehicle, curve_x, hill_px, spear_blocked)
 	var spear_mirror := _spear.get_mirror_state()
 	if _hud._rearview_node != null:
@@ -822,9 +842,17 @@ func _process(delta: float) -> void:
 				else:
 					_resolve_speed_kill(CULT_KILL_THRESHOLD, CULT_KILL_BO)
 					_sanity_ratio -= 0.15
+			LastRoadMovers.MoverType.FLEEING:
+				_on_fleeing_hit()   # 처치/튕김 없음. 화면 컷 + 소지품만
 			_:
 				_resolve_speed_kill(RUNNER_KILL_THRESHOLD, RUNNER_KILL_BO)
 		_sanity_ratio = clampf(_sanity_ratio, 0.0, 1.0)
+	if _movers.consume_fleeing_passed():
+		_say("fleeing_pass")
+	var roadside_cost := _movers.consume_roadside_cost()
+	if roadside_cost > 0.0:
+		_sanity_ratio = clampf(_sanity_ratio - roadside_cost, 0.0, 1.0)   # 갓길 컬트 목격 -5/-10
+		_say("roadside_cult")
 	if _movers.consume_cult_passed():
 		_sanity_ratio = clampf(_sanity_ratio - 0.02, 0.0, 1.0)   # 행렬 회피: 시선 비용 -2
 	if _movers.consume_ambush():
@@ -1330,6 +1358,7 @@ func _apply_route_modifiers(route_type: String) -> void:
 	_movers.SPACING_Z        = p["mover"]["spacing"]
 	_movers.SPAWN_CHANCE     = p["mover"]["chance"]
 	_movers.jiwon_info       = jiwon_info
+	_deer.reset_stage(current_stage, STAGE_LENGTH, stage_seed + 88888)
 	_watchers.jiwon_info     = jiwon_info
 
 	# 비
@@ -1370,6 +1399,7 @@ func _apply_route_modifiers(route_type: String) -> void:
 	_hud.set_mirror_alert(false)
 	_obstacles.set_dark_mode(is_dark or is_raining)
 	_movers.set_dark_mode(is_dark or is_raining)
+	_deer.set_dark_mode(is_dark or is_raining)
 	_blood_orbs.set_dark_mode(is_dark or is_raining)
 
 # ── 아이템 사용 ─────────────────────────────────────────────
@@ -1421,6 +1451,63 @@ func _update_backdrops(delta: float) -> void:
 	_forest_scroll += forest_delta
 	_apply_bg_scroll()
 
+
+# ── 도망자 충돌 (Doc 19 §도망자) ────────────────────────────────
+# 충돌 장면을 보여주지 않는다: 0.2초 화면 컷 → 소지품이 트렁크에 들어온다 (도로 드롭의 근사)
+func _on_fleeing_hit() -> void:
+	_screen_cut_timer = 0.2
+	_collapse_rect.visible = true
+	_collapse_rect.color = Color(0, 0, 0, 1)
+	_hud.play_sfx("impact", 0.8)
+	_meta.fleeing_hit_count += 1
+	_meta.save_data()
+	# 소지품: 지갑 50% / 담배 50% / 개인 물건 1~2개
+	var drops: Array = []
+	if randf() < 0.5: drops.append("wallet")
+	if randf() < 0.5: drops.append("cigarette")
+	var personal := ["photo", "prescription", "key_ring"]
+	drops.append(personal[randi() % personal.size()])
+	if randf() < 0.5: drops.append(personal[randi() % personal.size()])
+	var got := 0
+	for d in drops:
+		if _inv_mgr.trunk_add(str(d)) >= 0:
+			got += 1
+	if got > 0:
+		_hud.show_message("…소지품이 흩어졌다. (%d개 수거)" % got, 2.0)
+	_say("fleeing_hit", true)
+	_mono_quiet_time = 0.0
+
+var _screen_cut_timer: float = 0.0
+
+# ── 사슴머리 통과 (Doc 19 §통과 피해) ──────────────────────────
+func _on_deer_passed(speed_kmh: float) -> void:
+	if _game_state != "playing":
+		return
+	if speed_kmh >= 80.0:
+		_sanity_ratio -= 0.15
+		_deer_desat_pulse = 0.5
+		_say("deer_fast", true)
+		# black_fang 부적: 80km/h 이상 통과마다 BO +50, 정신력 추가 -10
+		if _charm_sys.has_charm("black_fang"):
+			_blood_orbs.award_bo(50)
+			_hud.popup_bo(50)
+			_sanity_ratio -= 0.10
+	elif speed_kmh >= 40.0:
+		_sanity_ratio -= 0.30
+		_vehicle.apply_part_damage("all", 8.0, 8.0)
+		_deer_desat_pulse = 0.75
+		_say("deer_slow", true)
+	else:
+		_sanity_ratio -= 0.50
+		_vehicle.apply_part_damage("all", 20.0, 20.0)
+		_deer_desat_pulse = 0.95
+		_movers.force_activate_near(_vehicle.scroll_z, 60.0)   # 주변 적 전체 즉시 활성화
+		_say("deer_slow", true)
+	_sanity_ratio = clampf(_sanity_ratio, 0.0, 1.0)
+	_trigger_cam_shake(4.0, 0.4)
+	_hud.play_sfx("breath", 0.5)
+	if _hallucination:
+		_hallucination.trigger_glitch(0.4)
 
 # ── 일반 종료 연출 (Doc 11) ──────────────────────────────────
 ## 서서히 어두워지며 혼잣말 4줄. 마지막 줄이 런 시작 대사와 같다 — 루프.
@@ -2050,6 +2137,7 @@ func _load_all_assets() -> void:
 		func(): if _jiwons.has_method("load_assets"): _jiwons.load_assets(),
 		func(): if _jumpers.has_method("load_assets"): _jumpers.load_assets(),
 		func(): if _movers.has_method("load_assets"): _movers.load_assets(),
+		func(): if _deer.has_method("load_assets"): _deer.load_assets(),
 		func(): if _scavenging.has_method("load_assets"): _scavenging.load_assets(),
 		func(): if _blood_orbs.has_method("load_assets"): _blood_orbs.load_assets(),
 		func(): _build_sky_tiled(),
