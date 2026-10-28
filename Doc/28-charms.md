@@ -1,5 +1,14 @@
 # 28. 부적 (Charms) 시스템
 
+<!-- impl-status:begin -->
+> **구현 상태** (2026-10-28 코드 대조): **🟡 데이터 37종 완성, 효과 연결 7종**
+> - ✅ 부적 DB 37종·태그·`count_tag`·상점 진열·슬롯머신·히든 해금 퍽: `charm_system.gd`, `shop_ui.gd`
+> - 🟡 효과가 코드에 연결된 부적: adrenaline_syringe, bloody_coin, carnival_ticket, distorted_mirror, magnetic_cat, nodding_dog, weathered_pebble (**7/37**). 나머지 30종은 장착해도 아무 효과 없음
+> - ❌ 시너지 페어(Duo)·안티 시너지: `check_duo`/`check_anti` 정의만 있고 호출처 0
+> - ❌ 연쇄 트리거·UX 피드백(조건 가시화)
+> - ❌ 31번 §7 전투 부적(검은 장갑 등): DB에 없음
+<!-- impl-status:end -->
+
 **목적**: 매 런마다 다른 빌드를 구축할 수 있는 핵심 시스템. 단순 수치 버프가 아닌 **조건부 효과 + 부적 간 시너지**를 통해 의미 있는 선택을 만든다. 영구 강화(파츠 업그레이드, 메타 퍽)는 안정적인 진행 곡선을 담당하고, 부적은 매 런의 정체성을 담당한다.
 
 ---

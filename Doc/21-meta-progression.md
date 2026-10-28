@@ -1,5 +1,13 @@
 # 21. 메타 진행 시스템
 
+<!-- impl-status:begin -->
+> **구현 상태** (2026-10-28 코드 대조): **🟡 데이터는 완성, 효과 연결은 부분**
+> - ✅ 포인트·4브랜치 20퍽 + 잠긴 칸 데이터·스킬트리 UI·세이브: `meta_progression.gd`, `skill_tree_ui.gd`
+> - ✅ 연결된 퍽: emergency_fuel, emergency_repair, famous_shop, fast_react, reality_sense, last_resort, trunk_expand 등 (`has_perk` 호출처 기준)
+> - ❌ 대상 시스템이 없어 작동 불가: premonition(사슴머리/도망자), hidden_route(비밀 노드), locked_slot(시체 적재)
+> - ❓ fate_reroll, legacy, radio_secret, deeper_shoulder 등 연결 여부 개별 확인 필요
+<!-- impl-status:end -->
+
 **목적**: 런이 끝날 때마다 포인트를 획득하고 메인 메뉴의 스킬 트리에서 캐릭터 퍽을 해금한다. 퍽은 이후 모든 런에 적용된다.
 
 ---

@@ -1,5 +1,12 @@
 # 7. 화면 상태 시스템
 
+<!-- impl-status:begin -->
+> **구현 상태** (2026-10-28 코드 대조): **🟡 부분**
+> - ✅ 정신력 → 채도 매핑 5단계·붉은색 보존: `game_world.gd _process` desat 테이블, `chromatic_aberration.gdshader red_dominance`
+> - ✅ 색수차 왜곡 (40%/퍽 30% 임계): `game_world.gd`
+> - ❌ 붕괴 상태(0) 전용 레이어·손 뻗는 모션·트렁크 노크음: 없음 (04 붕괴 상태 자체가 미구현)
+<!-- impl-status:end -->
+
 **목적**: HUD를 최소화하고 화면 자체가 자원 계기판이 되도록 설계.
 
 ## 자원 상태 → 화면 효과 매핑

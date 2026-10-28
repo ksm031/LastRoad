@@ -1,5 +1,10 @@
 # 좋은 로그라이트(Roguelite)를 만들기 위한 디자인 팁과 이론 — 종합 심층 리서치
 
+<!-- impl-status:begin -->
+> **구현 상태** (2026-10-28 코드 대조): **📎 참고 (외부 리서치)**
+> - 구현 대상 아님. 28번 부적 설계의 근거 문서
+<!-- impl-status:end -->
+
 ## 서론: 장르의 정의와 본 리서치의 관점
 
 로그라이트 디자인을 논하기 위해서는 먼저 장르의 경계를 이해해야 합니다. 1980년 〈Rogue〉가 던전 크롤·턴제·격자·영구 사망의 원형을 제시한 이래 NetHack, Angband, ADOM, Linley's Dungeon Crawl이 이 계보를 확장해 왔습니다. 2008년 베를린에서 열린 International Roguelike Development Conference에서 정립된 이른바 **베를린 해석(Berlin Interpretation)** 은 이 다섯 작품을 정전(canon)으로 삼아, 무작위 환경 생성·영구 사망(permadeath)·턴제·격자 기반·자원 관리·해킹앤슬래시·발견과 탐험·전술적 도전 등 9개의 고가치 요소와 ASCII 표시·던전·단일 캐릭터·복잡성 등의 저가치 요소를 제시하였습니다. 그러나 이 해석은 명시적으로 "정의가 아니라 정도의 기준"이라 밝혔음에도 불구하고 게임의 본질보다 Rogue 자체의 특징을 박제(剝製)했다는 비판을 받아 왔으며, Darren Grey는 〈Screw the Berlin Interpretation!〉에서 이를 "부정확하고 시대에 뒤떨어지며 역동적인 장르를 대표하지 못한다"고 공격한 바 있습니다.

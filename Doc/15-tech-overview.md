@@ -1,5 +1,12 @@
 # 15. 기술 개요
 
+<!-- impl-status:begin -->
+> **구현 상태** (2026-10-28 코드 대조): **✅ 대체로 구현됨**
+> - ✅ 도로 strip·차선·커브·언덕·시차 스크롤(하늘/산/숲): `road_renderer.gd`, `vehicle.gd COURSE`, `game_world.gd _apply_bg_scroll`
+> - ❌ 도로 5종 컬러 셋: `road_modulate` 1개 값으로 dark/rain 틴트만
+> - ❌ 구간별 원경 변화·전봇대
+<!-- impl-status:end -->
+
 ## 기술 스택 요약
 
 | 항목 | 내용 |

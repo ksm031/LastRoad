@@ -1,5 +1,11 @@
 # 13. 사운드 디자인
 
+<!-- impl-status:begin -->
+> **구현 상태** (2026-10-28 코드 대조): **❌ 미구현 — 오디오 파일 0개**
+> - `Asset/`에 wav/ogg/mp3 없음. `hud.gd play_sfx`는 스트림 없는 빈 AudioStreamPlayer (`# TODO: 실제 사운드 파일 경로 할당 필요`)
+> - 코드에서 호출되는 SFX 키: impact / repair / warning / pickup 4종뿐
+<!-- impl-status:end -->
+
 ## 음악 방향
 
 음악 없음이 기본. 엔진 소리와 라디오만 존재. 침묵이 공포다.

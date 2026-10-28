@@ -1,5 +1,15 @@
 # 3. Pseudo 3D 드라이빙
 
+<!-- impl-status:begin -->
+> **구현 상태** (2026-10-28 코드 대조): **✅ 대체로 구현됨**
+> - ✅ Pseudo 3D·키보드 주행·F/V/Z 단축키·마우스 클릭(룸미러·라디오·와이퍼 스위치): `hud.gd` 입력 처리
+> - ✅ 룸미러↔라디오 상호 배타 토글: `hud.gd` `_f_toggled`/`_v_toggled`
+> - ✅ 펑크 시 주행 성능 변화: `vehicle.gd handle_input` (1개 -25%/-30%, 2개 -50%/-55%, 3개+ 20km/h)
+> - ✅ 헤드라이트 light_h 매핑·업그레이드 연동: `billboard_manager.gd`, `vehicle.gd apply_upgrades`
+> - ⚠️ 속도 파라미터 표는 `vehicle.gd` 상수가 기준 (MAX 90, ACCEL 5, BRAKE 40). 문서 수치와 다르면 코드가 진실
+> - ❓ 우클릭으로 열린 화면 닫기: 미확인
+<!-- impl-status:end -->
+
 **목적**: 레퍼런스 영상(새벽 국도 + 헤드라이트 시야)을 게임으로 구현. 어둠 속에서 다가오는 위협의 공포감 극대화.
 
 ## 기본 구현 방식

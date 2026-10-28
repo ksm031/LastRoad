@@ -1,5 +1,14 @@
 # 9. 와이퍼 시스템
 
+<!-- impl-status:begin -->
+> **구현 상태** (2026-10-28 코드 대조): **🟡 부분**
+> - ✅ Z키/스위치 클릭 3단 순환, 빗물 누적·와이퍼 제거 마스크: `hud.gd _wiper_state`, `rain_renderer.gd`
+> - ✅ 우천 루트(weather)에서만 비 활성: `game_world.gd _apply_route_modifiers`
+> - ❌ 와이퍼 고장 조건
+> - ❌ 라디오·정신력·채도 연동 (`rain_renderer.gd`에 해당 참조 없음)
+> - ❌ 사운드
+<!-- impl-status:end -->
+
 **목적**: 비 오는 구간에서 시야 관리를 플레이어가 직접 수행. 와이퍼 리듬이 공포 연출의 도구가 된다.
 
 ## 기본 구조

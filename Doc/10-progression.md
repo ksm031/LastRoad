@@ -1,5 +1,13 @@
 # 10. 진행 구조
 
+<!-- impl-status:begin -->
+> **구현 상태** (2026-10-28 코드 대조): **✅ 대체로 구현됨**
+> - ✅ 6스테이지·5회 정비·스테이지 6 클리어 = 엔딩: `game_world.gd TOTAL_STAGES`
+> - ✅ 노드맵·5종 노드 타입 효과: `shop_ui.gd _build_routes`, `spawn_config.gd _ROUTE_TABLE`
+> - ❌ `숨겨진 경로` 퍽의 비밀 노드: `shop_ui.gd`에 없음
+> - 🟡 난이도 커브: `spawn_config.gd` stage_scale(+15%/스테이지) + `MONSTER_SPEEDS`만. 문서 표의 세부 특성(스테이지별 적 조합 등)은 적 미구현으로 적용 불가
+<!-- impl-status:end -->
+
 **목적**: 6개 스테이지를 순서대로 통과해 목적지에 도달한다. 각 스테이지 사이에 정비 구간과 루트 선택이 있다. 첫 스테이지는 루트 선택 없이 고정 진행이다.
 
 ---

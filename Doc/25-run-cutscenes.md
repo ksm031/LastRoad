@@ -1,5 +1,10 @@
 # 25. 런 클리어 컷신 시스템
 
+<!-- impl-status:begin -->
+> **구현 상태** (2026-10-28 코드 대조): **❌ 미구현**
+> - 컷신 재생 시스템 없음. `meta_progression.gd corpse_cutscene_played` 플래그만. `Asset/Movie/` 존재하나 환각 영상용(`hallucination_video.gd`)
+<!-- impl-status:end -->
+
 ## 개요
 
 6스테이지를 완주할 때마다 컷신 하나가 재생된다. 하데스의 방식과 동일하게, 클리어할수록 두 사람 사이에 무슨 일이 있었는지가 조각처럼 쌓인다.
