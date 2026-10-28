@@ -1,9 +1,11 @@
 # 13. 사운드 디자인
 
 <!-- impl-status:begin -->
-> **구현 상태** (2026-10-28 코드 대조): **❌ 미구현 — 오디오 파일 0개**
-> - `Asset/`에 wav/ogg/mp3 없음. `hud.gd play_sfx`는 스트림 없는 빈 AudioStreamPlayer (`# TODO: 실제 사운드 파일 경로 할당 필요`)
-> - 코드에서 호출되는 SFX 키: impact / repair / warning / pickup 4종뿐
+> **구현 상태** (2026-10-28 코드 대조, 같은 날 구현 반영): **🟡 임시 합성음 9종 (진짜 에셋 아님)**
+> - `tools/gen_placeholder_sfx.py` → `Asset/Sound/SFX/`: impact·warning·pickup·repair·engine_loop·monster_breath·whoosh·click·rustle
+> - ✅ 엔진 루프 RPM→pitch/속도→음량, 처치·튕김·BO·창 경고/스침·붕괴 노크 연결 (`hud.gd play_sfx`)
+> - ❌ 음악, 라디오 방송음, 펑크/구동계/컬트/사슴머리 전용음, 다이내믹 오디오 규칙
+> - 교체 방법: 같은 파일명으로 덮어쓰기
 <!-- impl-status:end -->
 
 ## 음악 방향
