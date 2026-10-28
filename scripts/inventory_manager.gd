@@ -9,6 +9,7 @@ var trunk_size := 20
 var trunk: Array = []
 var money: int = 5000
 var vehicle: LastRoadVehicle
+var charm_sys: Node = null   # CharmSystem (game_world가 주입). golden_cog·rusty_padlock 판정용
 
 # 폐차 상태 캐싱: wreck_seed -> { items: Dictionary, revealed: Array, search_slot: int, search_timer: float, search_done: bool }
 var wreck_states: Dictionary = {}
@@ -115,6 +116,17 @@ func get_or_generate_wreck_state(wreck_seed: int, wreck_cols: int, wreck_rows: i
 	for entry in drop_table:
 		if rng.randf() < float(entry[1]):
 			dropped.append(str(entry[0]))
+
+	# rusty_padlock 부적: '차량 부품류' 잡품 최소 1개 확정
+	if charm_sys != null and charm_sys.has_charm("rusty_padlock"):
+		var parts := ["wiper_blade", "oil_filter", "spark_plug", "battery", "side_mirror"]
+		var has_part := false
+		for p in parts:
+			if dropped.has(p):
+				has_part = true
+				break
+		if not has_part:
+			dropped.append(parts[rng.randi() % parts.size()])
 
 	var total_slots := wreck_cols * wreck_rows
 	var result: Dictionary = {}
@@ -320,7 +332,12 @@ func sort_trunk() -> void:
 func sell_all_junk(meta: MetaProgression = null) -> int:
 	var total_earned := 0
 	var bonus_mult := 1.0
-	
+	# golden_cog 부적: 5개 부품 모두 100% 유지 시 잡품 판매가 +50%
+	if charm_sys != null and charm_sys.has_charm("golden_cog") and vehicle != null:
+		if vehicle.dur_lf_tire >= 100.0 and vehicle.dur_rf_tire >= 100.0 and vehicle.dur_lb_tire >= 100.0 \
+				and vehicle.dur_rb_tire >= 100.0 and vehicle.dur_drivetrain >= 100.0:
+			bonus_mult *= 1.5
+
 	for i in trunk.size():
 		var item_id = str(trunk[i])
 		if item_id == "": continue

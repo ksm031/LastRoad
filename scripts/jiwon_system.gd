@@ -157,6 +157,10 @@ func _prune_hits() -> void:
 		if (_anim_time - hit_time) >= 0.3 and float(_hit_info[k]["until_z"]) <= scroll_z:
 			_hit_info.erase(k)
 
+# 부적 연동 (game_world가 매 프레임 갱신)
+var hide_hallucinations: bool = false   # empty_medicine_bottle
+var tint_hallucinations: bool = false   # sixth_eye
+
 func _watcher_at_k(k: int) -> Dictionary:
 	# target_k 일 때만 스폰
 	if k != target_k or target_k == -1:
@@ -219,9 +223,13 @@ func _update_billboards() -> void:
 		var fade: float = 1.0 - clampf((dz - VISIBLE_DZ_MAX * 0.75) / (VISIBLE_DZ_MAX * 0.25), 0.0, 1.0)
 		var light_h: float = proj.light_h
 
-		# 지원은 무조건 환영이므로 반투명
+		# 지원은 무조건 환영이므로 반투명 (sixth_eye 부적: 푸른 빛)
+		if hide_hallucinations:
+			continue
 		var color := Color.WHITE
 		color.a = 0.35
+		if tint_hallucinations:
+			color = Color(0.6, 0.78, 1.0, 0.45)
 
 		entries.append({
 			"depth": depth,

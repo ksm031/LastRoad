@@ -155,6 +155,7 @@ func _update_billboards() -> void:
 
 # Doc 04 붕괴 상태: 도로 오브 비표시 + 수집 불가
 var collection_enabled: bool = true
+var bo_mult: float = 1.0   # 부적(sixth_eye -30%) — game_world가 갱신
 
 func check_collection(vehicle: LastRoadVehicle) -> int:
 	if _tex_orb == null or not collection_enabled:
@@ -182,6 +183,7 @@ func check_collection(vehicle: LastRoadVehicle) -> int:
 		gained += BO_PER_ORB
 
 	if gained > 0:
+		gained = maxi(int(round(float(gained) * bo_mult)), 1)
 		run_total_bo += gained
 		orb_collected.emit(gained)
 	return gained

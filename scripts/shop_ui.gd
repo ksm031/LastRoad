@@ -448,15 +448,24 @@ func _refresh_upgrades() -> void:
 			btn.text = "최대 레벨 도달"
 			btn.disabled = true
 		else:
-			var cost = upgrades.UPGRADE_COSTS[lv]
+			var cost: int = upgrades.get_upgrade_cost(pid, _upgrade_cost_mult())
 			btn.text = "업그레이드: ₩%d" % cost
 			btn.disabled = (inv.money < cost)
+
+## 파츠 업그레이드 비용 배수: famous_shop 퍽 -15% × discarded_receipt 부적(-15%, SCAVENGE당 -3%)
+func _upgrade_cost_mult() -> float:
+	var m := 1.0
+	if meta != null and meta.has_perk("famous_shop"):
+		m *= 0.85
+	if charm_sys != null:
+		m *= float(charm_sys.get_upgrade_cost_mult())
+	return m
 
 func _on_upgrade_pressed(part_id: String) -> void:
 	if upgrades == null:
 		return
-	
-	var result = upgrades.upgrade_part(part_id, inv.money)
+
+	var result = upgrades.upgrade_part(part_id, inv.money, _upgrade_cost_mult())
 	if result.get("success", false):
 		inv.money -= int(result["cost"])
 		# 성공 시 차량 스탯 즉시 반영

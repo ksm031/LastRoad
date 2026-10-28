@@ -6,6 +6,8 @@ const BillboardManager = preload("res://scripts/billboard_manager.gd")
 var SPACING_Z        := 18.0    # 실제값은 spawn_config.gd에서 주입
 var SPAWN_CHANCE     := 0.25
 var seed_offset      := 0     # 스테이지마다 다른 배치를 위한 시드 오프셋
+var highlight        := false # old_wiper_motor 부적: 야광 강조 (game_world가 갱신)
+const HIGHLIGHT_COLOR := Color(1.3, 1.5, 0.9, 1.0)
 const VISIBLE_DZ_MIN   := 0.35
 const VISIBLE_DZ_MAX   := 90.0
 const WZ_BASE_OFFSET   := 10.0   # _obstacle_at_k: k*SPACING_Z + 10 + jitter
@@ -155,4 +157,6 @@ func _update_billboards() -> void:
 		var rect := Rect2(x - w * 0.5, y, w, h)
 		
 		var mat := _light_pool.get_material(float(proj.light_h)) if _light_pool else null
-		billboard_mgr.add_entry(depth, rect, tex, fade, mat, Color.WHITE, false, float(proj.light_h), float(proj.ground_y))
+		# old_wiper_motor 부적: 와이퍼 작동 중 장애물이 야광으로 강조
+		var col := HIGHLIGHT_COLOR if highlight else Color.WHITE
+		billboard_mgr.add_entry(depth, rect, tex, fade, mat, col, false, float(proj.light_h), float(proj.ground_y))

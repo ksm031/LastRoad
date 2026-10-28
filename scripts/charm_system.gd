@@ -214,20 +214,106 @@ var active_charms: Array[String] = []
 
 # ── 시스템 내부 변수 (시너지 카운터/타이머용) ──
 var _accel_time: float = 0.0
-var _dummy_used_this_stage: bool = false
-var _cig_heal_timer: float = 0.0
-var _cig_heal_amount: float = 0.0
+var _cig_heal_timer: float = 0.0     # half_smoked_cig: 60초 점진 회복 잔여
+var _cig_heal_amount: float = 0.0    # 남은 회복 총량 (0~1 비율)
+# 스테이지/런 1회성 효과 사용 여부
+var dummy_charges: int = 0           # crash_test_dummy: 스테이지당 1~2회
+var metal_cross_used: bool = false   # 런 1회
+var doll_used: bool = false          # counterclockwise_doll 런 1회
+var dead_watch_used: bool = false    # dead_man_watch 런 1회
+var backward_radio_warned: bool = false  # backward_radio: 창 예고 1회/쿨다운
+var stage_stop_time: float = 0.0     # bound_wristwatch: 스테이지 내 누적 정차 시간
 
 func reset_run() -> void:
 	active_charms.clear()
 	_accel_time = 0.0
-	_dummy_used_this_stage = false
 	_cig_heal_timer = 0.0
 	_cig_heal_amount = 0.0
+	metal_cross_used = false
+	doll_used = false
+	dead_watch_used = false
+	reset_stage()
 	charms_updated.emit()
 
 func reset_stage() -> void:
-	_dummy_used_this_stage = false
+	dummy_charges = 0
+	if has_charm("crash_test_dummy"):
+		dummy_charges = 2 if count_tag("DURABILITY") >= 3 else 1
+	stage_stop_time = 0.0
+	backward_radio_warned = false
+
+## 차량 물리에 들어가는 수치 모디파이어 묶음. vehicle.charm_mods 에 주입된다.
+## 부적이 바뀔 때(charms_updated)와 스테이지 시작 때 game_world가 갱신.
+func get_vehicle_mods() -> Dictionary:
+	var m := {
+		"max_speed_mult": 1.0,
+		"brake_mult": 1.0,
+		"damage_mult": 1.0,
+		"hi_steer_relief": 0.0,      # 고속 조향 둔화 완화 비율 (rusty_compass 0.5)
+		"accel_hold_bonus": false,   # worn_brake_pad
+		"burnt_clutch": false,       # 연료 30% 미만 최고속 +20%
+		"punctured_tin": false,      # 타력 주행 연료 미세 회복
+		"thick_patch": false,        # 펑크 1개 페널티 절반
+		"torn_photo": false,         # 정신력 20 이하 연비 -30%
+		"headwind": false,           # 창 명중 시 400km/h
+	}
+	if has_charm("broken_speedometer"): m["max_speed_mult"] *= 1.15
+	if has_charm("heavy_weight"):
+		m["max_speed_mult"] *= 0.90
+		m["brake_mult"] *= 1.5
+		m["damage_mult"] *= 0.8
+	if has_charm("rusty_compass"):  m["hi_steer_relief"] = 0.5
+	if has_charm("worn_brake_pad"): m["accel_hold_bonus"] = true
+	if has_charm("burnt_clutch"):   m["burnt_clutch"] = true
+	if has_charm("punctured_tin"):  m["punctured_tin"] = true
+	if has_charm("thick_patch"):    m["thick_patch"] = true
+	if has_charm("torn_photo"):     m["torn_photo"] = true
+	if has_charm("headwind_amulet"): m["headwind"] = true
+	return m
+
+## BO 획득 배수 (sixth_eye -30%)
+func get_bo_mult() -> float:
+	return 0.7 if has_charm("sixth_eye") else 1.0
+
+## 정신력 회복 배수 (backward_radio -50%)
+func get_sanity_recovery_mult() -> float:
+	return 0.5 if has_charm("backward_radio") else 1.0
+
+## 파츠 업그레이드 비용 배수 (discarded_receipt: -15%, 다른 SCAVENGE 1개당 -3%)
+func get_upgrade_cost_mult() -> float:
+	if not has_charm("discarded_receipt"):
+		return 1.0
+	var others := count_tag("SCAVENGE") - 1
+	return clampf(1.0 - 0.15 - 0.03 * float(maxi(others, 0)), 0.5, 1.0)
+
+## half_smoked_cig 점진 회복 틱. 이번 프레임 회복량(비율) 반환
+func tick_cig_heal(delta: float) -> float:
+	if _cig_heal_timer <= 0.0 or _cig_heal_amount <= 0.0:
+		return 0.0
+	var dt := minf(delta, _cig_heal_timer)
+	_cig_heal_timer -= dt
+	var step := _cig_heal_amount * (dt / maxf(_cig_heal_timer + dt, 0.001))
+	_cig_heal_amount -= step
+	return step
+
+func start_cig_heal(total: float, duration: float) -> void:
+	_cig_heal_timer = duration
+	_cig_heal_amount = total
+
+## 무작위 부적 1개 영구 소멸 (counterclockwise_doll). 소멸된 id 반환
+func lose_random_charm(exclude: String = "") -> String:
+	var pool: Array[String] = []
+	for c in active_charms:
+		if c != exclude:
+			pool.append(c)
+	if pool.is_empty():
+		if exclude != "" and has_charm(exclude):
+			remove_charm(exclude)
+			return exclude
+		return ""
+	var pick: String = pool[randi() % pool.size()]
+	remove_charm(pick)
+	return pick
 
 func has_charm(charm_id: String) -> bool:
 	return active_charms.has(charm_id)

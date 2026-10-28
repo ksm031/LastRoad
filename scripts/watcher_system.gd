@@ -47,6 +47,10 @@ var billboard_mgr: BillboardManager
 const POOL_SIZE := 20
 var jiwon_info: Dictionary = {}
 var _current_sanity_ratio: float = 1.0
+# 부적 연동 (game_world가 매 프레임 갱신)
+var hide_hallucinations: bool = false   # empty_medicine_bottle
+var tint_hallucinations: bool = false   # sixth_eye
+const HALLUCINATION_TINT := Color(0.6, 0.78, 1.0, 0.45)
 
 func _ready() -> void:
 	pass
@@ -221,6 +225,9 @@ func _update_billboards() -> void:
 		var is_hit = _is_hit_active(k)
 		if not is_hit and (dz < VISIBLE_DZ_MIN or dz > VISIBLE_DZ_MAX):
 			continue
+		# empty_medicine_bottle 부적: 환각이 보이지 않는다 (충돌은 game_world에서 실제 손상)
+		if hide_hallucinations and bool(o.get("is_hallucination", false)):
+			continue
 
 		var render_dz = dz
 		if is_hit and dz < 0.84:
@@ -254,10 +261,12 @@ func _update_billboards() -> void:
 		var fade: float = 1.0 - clampf((dz - VISIBLE_DZ_MAX * 0.75) / (VISIBLE_DZ_MAX * 0.25), 0.0, 1.0)
 		var light_h: float = proj.light_h
 		
-		# 환영 와쳐는 반투명
+		# 환영 와쳐는 반투명 (sixth_eye 부적: 푸른 빛으로 실체와 구분)
 		var color := Color.WHITE
 		if bool(o.get("is_hallucination", false)):
 			color.a = 0.35
+			if tint_hallucinations:
+				color = HALLUCINATION_TINT
 
 		entries.append({
 			"depth": depth,

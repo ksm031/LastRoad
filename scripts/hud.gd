@@ -1167,7 +1167,7 @@ func force_death_frequency() -> void:
 func _adjust_radio_step(delta: int) -> void:
 	if delta == 0:
 		return
-	if _radio_locked:
+	if _radio_locked or radio_input_blocked:
 		# 손이 다이얼에서 미끄러진다 — 작은 금속음만
 		play_sfx("repair", 0.6)
 		return
@@ -1228,6 +1228,13 @@ func _on_mirror_alert_draw() -> void:
 ## 라디오 줌(V) 중인지 — Doc 30 상호 잠금용
 func is_radio_zoomed() -> bool:
 	return _v_toggled
+
+## 와이퍼 작동 중인지 (old_wiper_motor 부적용)
+func is_wiper_on() -> bool:
+	return _wiper_state > 0
+
+## 외부 요인(부적 broken_speedometer: 가속 중)으로 라디오 다이얼 조작 차단
+var radio_input_blocked: bool = false
 
 func get_radio_on_death() -> bool:
 	return _radio_on_death

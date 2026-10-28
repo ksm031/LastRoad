@@ -278,10 +278,14 @@ func _ready() -> void:
 	
 	_charm_sys = _CharmSystemScript.new()
 	add_child(_charm_sys)
-	
+	# 부적이 바뀌면 차량 모디파이어 재계산
+	_charm_sys.charms_updated.connect(_on_charms_updated)
+	_vehicle.part_damaged.connect(_on_part_damaged)
+
 	_inv_mgr = _InvMgrScript.new()
 	_inv_mgr.apply_meta(_meta)
 	_inv_mgr.vehicle = _vehicle
+	_inv_mgr.charm_sys = _charm_sys
 	add_child(_inv_mgr)
 	
 	_loot_ui = _LootUIScript.new()
@@ -525,13 +529,21 @@ func _process(delta: float) -> void:
 		var monster_speed := float(MONSTER_SPEEDS[clampi(current_stage - 1, 0, TOTAL_STAGES - 1)])
 		if _weathered_pebble_timer > 0.0:
 			monster_speed *= 0.7 # 30% 느려짐
-			
+		# safe_drive_amulet: 5개 부품 모두 100% 유지 시 괴물 접근 -20%
+		if _charm_sys.has_charm("safe_drive_amulet") and _all_parts_full():
+			monster_speed *= 0.8
+
 		var speed_diff := _vehicle.speed - monster_speed
 		_monster_distance += speed_diff * MONSTER_GAIN_K * delta
+		# freakish_antenna: 죽음의 주파수를 끄지 않으면 괴물과 거리 점진 증가
+		if _charm_sys.has_charm("freakish_antenna") and _hud.get_radio_on_death():
+			_monster_distance += 2.0 * delta
 		_monster_distance = clampf(_monster_distance, 0.0, MONSTER_MAX_DIST)
-	
+
 	# ── 게임오버 체크: 괴물에게 따라잡힘 ──
-	if _monster_distance <= 0.0:
+	if _monster_distance <= 0.0 and _try_death_save():
+		pass   # 부적이 한 번 살렸다
+	elif _monster_distance <= 0.0:
 		_game_state = "game_over"
 		_state_timer = 0.0
 		_hud.show_gameover()
@@ -574,6 +586,9 @@ func _process(delta: float) -> void:
 	if _monster_distance < 40.0:
 		var drain_spd := (40.0 - _monster_distance) * 0.0025
 		_sanity_ratio -= drain_spd * delta
+
+	# ── 부적 지속 효과 (Doc 28) ──
+	_update_charm_passives(delta)
 	
 	# 라디오 죽음의 주파수: 정신력 -2/초 (GDD 18-radio.md)
 	if _hud.get_radio_on_death():
@@ -728,11 +743,18 @@ func _process(delta: float) -> void:
 
 	if _obstacles.check_collision(_vehicle):
 		BillboardManager.add_impact_shake(0.6)
+		var obs_tire_dmg := 5.0
 		if _charm_sys.has_charm("weathered_pebble"):
 			_weathered_pebble_timer = 5.0
-		# GDD §4.5: 포트홀/낙석 — 현재 차선 기준 전륜 -5%, 구동계 -1.5%
-		var obs_contact := _get_contact_side()
-		_vehicle.apply_part_damage(obs_contact, 5.0, 1.5)
+			obs_tire_dmg *= 0.5   # 타이어 손상 -50%
+		# crash_test_dummy: 스테이지당 1~2회 장애물 내구도 손실 무효
+		if _charm_sys.dummy_charges > 0:
+			_charm_sys.dummy_charges -= 1
+			_hud.show_message("더미 인형이 충격을 받아냈다.")
+		else:
+			# GDD §4.5: 포트홀/낙석 — 현재 차선 기준 전륜 -5%, 구동계 -1.5%
+			var obs_contact := _get_contact_side()
+			_vehicle.apply_part_damage(obs_contact, obs_tire_dmg, 1.5)
 		_hud.on_rock_hit()
 	# Doc 31 §6: 범퍼 Lv3 관통 — 한 프레임에 최대 N명 처치
 	var wat_hits := _watchers.check_collision(_vehicle, _vehicle.get_penetration_count())
@@ -742,6 +764,7 @@ func _process(delta: float) -> void:
 			if _hallucination: _hallucination.trigger_glitch(0.25)
 			_sanity_ratio -= 0.08
 			_hud.play_sfx("warning") # 환영은 기분 나쁜 소리
+			_on_hallucination_collision()
 		else:
 			# 실체 충돌: 속도 임계 처치 판정 (Doc 31 §1)
 			_resolve_speed_kill(WATCHER_KILL_THRESHOLD, WATCHER_KILL_BO)
@@ -764,6 +787,7 @@ func _process(delta: float) -> void:
 			if _hallucination: _hallucination.trigger_glitch(0.35) # 지원은 더 강한 글리치
 			_sanity_ratio -= 0.12 # 지원 환영은 더 큰 충격
 			_hud.play_sfx("warning")
+			_on_hallucination_collision()
 		else:
 			var jiw_contact := _get_contact_side()
 			_vehicle.apply_part_damage(jiw_contact, 12.0, 4.0)
@@ -884,7 +908,7 @@ func _resolve_speed_kill(base_threshold: float, bo_reward: int) -> void:
 			_vehicle.apply_adrenaline_boost()
 		# ── 숨겨진 콤보: 배수 적용 (Doc 31 §3) ──
 		var mult := _register_combo_kill()
-		var bo_gain := int(round(float(bo_reward) * mult))
+		var bo_gain := int(round(float(bo_reward) * mult * _charm_sys.get_bo_mult()))
 		if _collapsed:
 			bo_gain = 0   # Doc 04 붕괴 상태: 적 타격 BO 드롭 없음
 		_blood_orbs.award_bo(bo_gain)
@@ -1185,7 +1209,13 @@ func _on_shop_depart_requested(route_type: String) -> void:
 	# 정신력: 50% 미만이면 50%까지 회복
 	if _sanity_ratio < 0.5:
 		_sanity_ratio = 0.5
+	# bound_wristwatch: 지난 스테이지 누적 정차 시간 → 정신력 회복 (2초당 +1, 최대 +50)
+	if _charm_sys.has_charm("bound_wristwatch") and _charm_sys.stage_stop_time > 0.0:
+		var bonus := minf(_charm_sys.stage_stop_time * 0.005, 0.5)
+		_sanity_ratio += bonus * _charm_sys.get_sanity_recovery_mult()
 	_sanity_ratio = clampf(_sanity_ratio, 0.0, 1.0)
+	_charm_sys.reset_stage()
+	_on_charms_updated()
 
 	# 응급 수리 퍽: 스테이지 3 진입 시 30% 이하인 부품 30% 복구
 	if current_stage == 3 and _meta.has_perk("emergency_repair"):
@@ -1297,6 +1327,11 @@ func _on_item_used(item_id: String) -> void:
 			_vehicle.apply_cigarette_buff(10.0)
 		if _collapsed:
 			amount *= 0.7   # Doc 04 붕괴 상태: 손이 떨려 제대로 피우지 못함 (-30%)
+		amount *= _charm_sys.get_sanity_recovery_mult()   # backward_radio -50%
+		if _charm_sys.has_charm("half_smoked_cig"):
+			# 즉시 회복 -10, 대신 60초에 걸쳐 총 +40
+			amount = maxf(amount - 0.10, 0.0)
+			_charm_sys.start_cig_heal(0.40 * _charm_sys.get_sanity_recovery_mult(), 60.0)
 		_cigarette_recovery_timer = 4.5
 		_cigarette_recovery_amount = amount
 		_hud.spawn_smoke()
@@ -1328,6 +1363,119 @@ func _update_backdrops(delta: float) -> void:
 	_forest_scroll += forest_delta
 	_apply_bg_scroll()
 
+
+# ── 부적 효과 (Doc 28) ───────────────────────────────────────
+## 부적 구성이 바뀌거나 스테이지가 시작될 때 파생 수치 재계산
+func _on_charms_updated() -> void:
+	_vehicle.charm_mods = _charm_sys.get_vehicle_mods()
+	_blood_orbs.bo_mult = _charm_sys.get_bo_mult()
+
+func _all_parts_full() -> bool:
+	return _vehicle.dur_lf_tire >= 100.0 and _vehicle.dur_rf_tire >= 100.0 \
+		and _vehicle.dur_lb_tire >= 100.0 and _vehicle.dur_rb_tire >= 100.0 \
+		and _vehicle.dur_drivetrain >= 100.0
+
+## 매 프레임 지속 효과
+func _update_charm_passives(delta: float) -> void:
+	_vehicle.sanity_ratio_ext = _sanity_ratio
+	# half_smoked_cig: 60초 점진 회복
+	_sanity_ratio += _charm_sys.tick_cig_heal(delta)
+	# bound_wristwatch: 정차 시간 누적
+	if _vehicle.speed < 1.0:
+		_charm_sys.stage_stop_time += delta
+	# empty_medicine_bottle: 정신력 10 이하 환각 비표시 / sixth_eye: 40 이하 환각 푸른 빛
+	var hide_hal := _charm_sys.has_charm("empty_medicine_bottle") and _sanity_ratio <= 0.10
+	var tint_hal := _charm_sys.has_charm("sixth_eye") and _sanity_ratio <= 0.40
+	_watchers.hide_hallucinations = hide_hal
+	_jiwons.hide_hallucinations = hide_hal
+	_watchers.tint_hallucinations = tint_hal
+	_jiwons.tint_hallucinations = tint_hal
+	# old_wiper_motor: 와이퍼 작동 중 장애물 야광 강조
+	_obstacles.highlight = _charm_sys.has_charm("old_wiper_motor") and _hud.is_wiper_on()
+	# broken_speedometer: 가속 중 라디오 조작 불가 (SPEED 3개 이상이면 무효)
+	var w_held := Input.is_key_pressed(KEY_W) or Input.is_action_pressed("ui_up")
+	_hud.radio_input_blocked = _charm_sys.has_charm("broken_speedometer") and w_held and _charm_sys.count_tag("SPEED") < 3
+	# backward_radio: 죽음의 주파수 청취 중 창 발동 5초 전 라디오가 미리 흘린다
+	if _charm_sys.has_charm("backward_radio") and _hud.get_radio_on_death():
+		if _spear.phase == "idle" and _spear.is_armed() and _spear.seconds_to_next() <= 5.0:
+			if not _charm_sys.backward_radio_warned:
+				_charm_sys.backward_radio_warned = true
+				_hud.show_subtitle("[color=#b08080]…뒤에서… 던진다… 뒤에서…[/color]", 2.5)
+		elif _spear.phase != "idle":
+			_charm_sys.backward_radio_warned = false
+	# last_prayer: 부품 0% 또는 정신력 0 도달 → 1회 회복 후 소멸
+	if _charm_sys.has_charm("last_prayer"):
+		var part_zero := _vehicle.dur_lf_tire <= 0.0 or _vehicle.dur_rf_tire <= 0.0 \
+			or _vehicle.dur_lb_tire <= 0.0 or _vehicle.dur_rb_tire <= 0.0 or _vehicle.dur_drivetrain <= 0.0
+		if part_zero or _sanity_ratio <= 0.0:
+			_vehicle.dur_lf_tire = maxf(_vehicle.dur_lf_tire, 30.0)
+			_vehicle.dur_rf_tire = maxf(_vehicle.dur_rf_tire, 30.0)
+			_vehicle.dur_lb_tire = maxf(_vehicle.dur_lb_tire, 30.0)
+			_vehicle.dur_rb_tire = maxf(_vehicle.dur_rb_tire, 30.0)
+			_vehicle.dur_drivetrain = maxf(_vehicle.dur_drivetrain, 30.0)
+			_sanity_ratio = maxf(_sanity_ratio, 0.5)
+			_vehicle.fuel = maxf(_vehicle.fuel, _vehicle.fuel_max * 0.5)
+			_vehicle.fuel_ratio = _vehicle.fuel / _vehicle.fuel_max
+			_charm_sys.remove_charm("last_prayer")
+			_hud.show_subtitle("…마지막 기도가 들렸다.", 2.5)
+			_hud.play_sfx("pickup", 0.8)
+	_sanity_ratio = clampf(_sanity_ratio, 0.0, 1.0)
+
+## 환각 위협 충돌 공통 훅
+func _on_hallucination_collision() -> void:
+	# cracked_hand_mirror: 환각 소멸 시 정신력 +5 (SANITY 3개 이상 +10)
+	if _charm_sys.has_charm("cracked_hand_mirror"):
+		_sanity_ratio += 0.10 if _charm_sys.count_tag("SANITY") >= 3 else 0.05
+	# empty_medicine_bottle: 환각이 안 보이는 대신 충돌하면 실제 손상
+	if _charm_sys.has_charm("empty_medicine_bottle") and _sanity_ratio <= 0.10:
+		_vehicle.apply_part_damage(_get_contact_side(), BOUNCE_TIRE_DMG, BOUNCE_DRIVETRAIN_DMG)
+		_vehicle.apply_bounce_hit()
+
+## 내구도 감소 훅 (vehicle.part_damaged)
+func _on_part_damaged(_amount: float) -> void:
+	if _game_state != "playing":
+		return
+	# rusty_razor: 내구도 감소마다 25% 확률 ₩500
+	if _charm_sys.has_charm("rusty_razor") and randf() < 0.25:
+		_inv_mgr.money += 500
+		_hud.show_message("녹슨 면도날: +₩500")
+
+## 괴물에게 잡히는 순간 1회성 구원 부적. true면 게임오버 취소
+func _try_death_save() -> bool:
+	# metal_cross: 정신력 풀회복 + 5초 가속 부스트
+	if _charm_sys.has_charm("metal_cross") and not _charm_sys.metal_cross_used:
+		_charm_sys.metal_cross_used = true
+		_sanity_ratio = 1.0
+		_monster_distance = MONSTER_START_DIST * 0.5
+		_vehicle.speed = _vehicle.max_speed
+		_vehicle._adrenaline_timer = 5.0
+		_hud.show_subtitle("…십자가가 뜨겁다.", 2.5)
+		_hud.play_sfx("pickup", 0.6)
+		return true
+	# dead_man_watch: 시간 되감기 (근사: 거리 초기화) + BO -50%
+	if _charm_sys.has_charm("dead_man_watch") and not _charm_sys.dead_watch_used:
+		_charm_sys.dead_watch_used = true
+		_monster_distance = MONSTER_START_DIST
+		_blood_orbs.run_total_bo = int(_blood_orbs.run_total_bo * 0.5)
+		if _hallucination: _hallucination.trigger_glitch(0.5)
+		_hud.show_subtitle("…시계가 거꾸로 돈다.", 2.5)
+		return true
+	# counterclockwise_doll: 스테이지 시작 지점에서 부활, 부적 1개 영구 소멸
+	if _charm_sys.has_charm("counterclockwise_doll") and not _charm_sys.doll_used:
+		_charm_sys.doll_used = true
+		var lost := _charm_sys.lose_random_charm("counterclockwise_doll")
+		_vehicle.scroll_z = stage_start_z
+		_vehicle.speed = 0.0
+		_vehicle.cam_x = 0.0
+		_monster_distance = MONSTER_START_DIST
+		_sanity_ratio = maxf(_sanity_ratio, 0.5)
+		_movers.reset_stage()
+		_spear.reset_stage(current_stage)
+		if _hallucination: _hallucination.trigger_glitch(0.6)
+		var lost_name: String = str(_charm_sys.get_charm_data(lost).get("name", "")) if lost != "" else ""
+		_hud.show_subtitle("…인형이 거꾸로 돌았다. (%s 소멸)" % lost_name, 3.0)
+		return true
+	return false
 
 # ── 붕괴 상태 (Doc 04 §정신력 0) ─────────────────────────────
 func _build_collapse_overlay() -> void:
@@ -1434,8 +1582,13 @@ func _on_spear_hit(_side: int) -> void:
 	if _game_state != "playing":
 		return
 	# 5개 부품 모두 -10% (창이 차체를 관통), 정신력 -25, 0.5초 핸들 잠금
-	_vehicle.apply_part_damage("all", 10.0, 10.0)
+	var spear_dmg := 10.0
+	if _charm_sys.has_charm("safe_drive_amulet") and _all_parts_full():
+		spear_dmg = 5.0   # 안전운전 부적: 전 부품 100% 상태의 명중 손상 -50%
+	_vehicle.apply_part_damage("all", spear_dmg, spear_dmg)
 	_vehicle.apply_spear_hit()
+	if _charm_sys.has_charm("headwind_amulet"):
+		_vehicle.apply_headwind()   # 명중 순간 400km/h 1초 → 6초 동력 무효
 	_sanity_ratio = clampf(_sanity_ratio - 0.25, 0.0, 1.0)
 	_reset_combo()
 	_trigger_cam_shake(9.0, 0.5)
@@ -1661,6 +1814,18 @@ func _reset_game() -> void:
 	_stages_cleared_this_run = 0
 	_sanity_ratio = 1.0
 	_exit_collapse()
+	# 부적은 런 단위 (Doc 28). 이전엔 리셋이 없어 다음 런으로 넘어오던 버그
+	_charm_sys.reset_run()
+	# first_luck 퍽: 런 시작 시 무작위 일반 부적 1개 즉시 장착
+	if _meta.has_perk("first_luck"):
+		var hidden := ["dead_man_watch", "sixth_eye", "black_fang", "last_prayer", "backward_radio"]
+		var pool: Array = []
+		for cid in _charm_sys.CHARM_DB.keys():
+			if not hidden.has(cid):
+				pool.append(cid)
+		if not pool.is_empty():
+			_charm_sys.add_charm(str(pool[randi() % pool.size()]))
+	_on_charms_updated()
 	_cigarette_recovery_timer = 0.0
 	_cigarette_recovery_amount = 0.0
 	_state_timer = 0.0

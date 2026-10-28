@@ -83,6 +83,16 @@ func reset_stage(stage: int) -> void:
 func is_active() -> bool:
 	return phase != "idle"
 
+## 이 스테이지에서 창이 발동 가능한가 (backward_radio 예고용)
+func is_armed() -> bool:
+	return STAGE_TABLE.has(_stage)
+
+## 다음 발동까지 남은 쿨다운(초, 거리 배율 미반영)
+func seconds_to_next() -> float:
+	if _double_timer > 0.0:
+		return _double_timer
+	return _cooldown
+
 ## 룸미러 연출용 상태. rearview_renderer가 매 프레임 읽는다.
 ##  arm_t: 팔이 올라간 정도 0~1 / streak_t: 날아오는 창의 접근 0~1
 func get_mirror_state() -> Dictionary:

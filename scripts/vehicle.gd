@@ -57,7 +57,7 @@ const FUEL_RATE_BASE     := 5.5    # L/km (낮을수록 좋음)
 # 이러면 100 km/h 에서  100/3600 * 5.5 ≈ 0.153 L/s  →  40L로 약 261초(4.3분) 주행 가능
 # GDD 기준: 만땅 40L로 7.2 km → 80 km/h 기본속도에서  7.2/80*3600 = 324초(5.4분)
 # → 소모율 조정:  fuel/s = speed / 3600 * FUEL_RATE_BASE * FUEL_DRAIN_MULT
-const FUEL_DRAIN_MULT    := 0.75   # 밸런스 조정용 배율 (GDD 기준 만땅 ~5분 주행)
+const FUEL_DRAIN_MULT    := 1.0    # 밸런스 배율. 이중 소모 버그 제거 후 1.0 → 90km/h 만땅 ~4.8분 (GDD "~5분")
 const FUEL_EMPTY_MAX_SPD := 15.0   # 0L 시 최고속도 (기어가는 수준)
 
 # ── 핸들 파라미터 ────────────────────────────────────────────
@@ -339,17 +339,25 @@ func handle_input(delta: float) -> void:
 	if _adrenaline_timer > 0.0:
 		_adrenaline_timer -= delta
 
-	# ── 연료 소모 및 물리 연산 ──────────────────────────────────
-	if speed > 0.1:
-		# 연료 소모 공식: L/s = (L/km) * (km/s)
-		var consumption := fuel_rate * (speed / 3600.0) * delta
-		var prev_fuel := fuel
-		fuel = maxf(fuel - consumption, 0.0)
-		fuel_ratio = fuel / fuel_max
-		
-		# 연료가 막 0이 된 순간 신호 발생
-		if prev_fuel > 0.0 and fuel <= 0.0:
-			fuel_depleted.emit()
+	# 연료 소모는 update_fuel()에서만 처리한다.
+	# (이전엔 여기서도 한 번 더 빼서 실제 소모율이 설계의 1.75배였음 — 연료 부족 체감의 원인)
+
+	# worn_brake_pad: 가속만 10초 이상 연속 유지 시 가속도 +30%. 브레이크 시 초기화
+	if s:
+		_accel_hold_time = 0.0
+	elif w:
+		_accel_hold_time += delta
+
+	# headwind_amulet: 창 명중 직후 1초 400km/h → 6초 동력 무효
+	if _headwind_timer > 0.0:
+		_headwind_timer -= delta
+		speed = HEADWIND_SPEED
+		cam_x = clampf(cam_x, -1.0, 1.0)
+		_update_steering_only(a, d, delta, steer_jolt)
+		return
+	if _no_power_timer > 0.0:
+		_no_power_timer -= delta
+		w = false
 
 	# 가속/제동 판단
 	# 내구도 페널티 계산
@@ -373,8 +381,13 @@ func handle_input(delta: float) -> void:
 	
 	# GDD §4.1: 타이어 펑크 정확한 패널티
 	if flat_count == 1:
-		effective_max  *= 0.75   # 최고속도 -25%
-		effective_accel *= 0.70  # 가속력 -30%
+		if bool(charm_mods.get("thick_patch", false)):
+			effective_max  *= 0.875  # thick_patch: 페널티 절반
+			effective_accel *= 0.85
+			pull_dir *= 0.5
+		else:
+			effective_max  *= 0.75   # 최고속도 -25%
+			effective_accel *= 0.70  # 가속력 -30%
 	elif flat_count == 2:
 		effective_max  *= 0.50   # 최고속도 -50%
 		effective_accel *= 0.45  # 가속력 -55%
@@ -392,7 +405,14 @@ func handle_input(delta: float) -> void:
 
 	if collapse_penalty:
 		effective_max *= COLLAPSE_MAX_SPEED_MULT   # 심리적 무너짐이 몸에 전달
-		
+
+	# ── 부적 모디파이어 (charm_system.get_vehicle_mods) ──
+	effective_max *= float(charm_mods.get("max_speed_mult", 1.0))
+	if bool(charm_mods.get("burnt_clutch", false)) and fuel / maxf(fuel_max, 1.0) < 0.3:
+		effective_max *= 1.2
+	if bool(charm_mods.get("accel_hold_bonus", false)) and _accel_hold_time >= 10.0:
+		effective_accel *= 1.3
+
 	var can_accel := (fuel > 0.0)
 	
 	if w:
@@ -405,7 +425,7 @@ func handle_input(delta: float) -> void:
 				speed = minf(speed + (accel * 0.2) * delta, 15.0)
 			# 시속 15km 이상일 때는 가속 불가 (관성 주행 중이므로 else에서 처리)
 	elif s:
-		speed = maxf(speed - brake_force * delta, 0.0)
+		speed = maxf(speed - brake_force * float(charm_mods.get("brake_mult", 1.0)) * delta, 0.0)
 	
 	# 코스팅 (키를 뗐거나, 연료가 없어 가속이 안 되는 상황)
 	if not s and (not w or (not can_accel and speed >= 15.0)):
@@ -417,6 +437,10 @@ func handle_input(delta: float) -> void:
 			# 감속 중
 			var drag_factor := _BASE_DRAG * (0.5 if not can_accel else 1.0)
 			speed = maxf(speed - drag_factor * delta, target_min)
+			# punctured_tin: 타력 주행 중 연료 게이지 미세 회복
+			if bool(charm_mods.get("punctured_tin", false)) and fuel > 0.0:
+				fuel = minf(fuel + 0.03 * delta, fuel_max)
+				fuel_ratio = fuel / fuel_max
 		elif speed < target_min and not w:
 			# 내리막 등에서 속도가 붙었다가 평지에서 감속될 때 등
 			pass 
@@ -429,6 +453,8 @@ func handle_input(delta: float) -> void:
 	var lateral_mult := clampf(speed / 50.0, 0.0, 1.0) * traction_factor
 	# 고속 둔화: 60km/h부터 줄어 120km/h에서 60% (02-core-loop 속도 딜레마의 '반응시간' 축)
 	var hi_t := clampf((speed - HI_STEER_START) / (HI_STEER_END - HI_STEER_START), 0.0, 1.0)
+	if speed >= 50.0:
+		hi_t *= 1.0 - float(charm_mods.get("hi_steer_relief", 0.0))   # rusty_compass: 고속 조향 둔화 완화
 	lateral_mult *= lerpf(1.0, HI_STEER_MIN_MULT, hi_t)
 	var frame_pull = pull_dir * 0.25 * lateral_speed * lateral_mult * delta
 	
@@ -478,10 +504,15 @@ func update_fuel(delta: float) -> void:
 	var drain_mult := FUEL_DRAIN_MULT
 	if dur_drivetrain <= 0.0:
 		drain_mult *= 3.0  # 구동계 망가지면 연비 3배 악화
-		
+	if bool(charm_mods.get("torn_photo", false)) and sanity_ratio_ext <= 0.2:
+		drain_mult *= 0.7  # torn_photo: 정신력 20 이하 연비 -30%
+
 	var consumption := (speed / 3600.0) * fuel_rate * drain_mult
+	var prev_fuel := fuel
 	fuel = maxf(fuel - consumption * delta, 0.0)
 	fuel_ratio = fuel / fuel_max
+	if prev_fuel > 0.0 and fuel <= 0.0:
+		fuel_depleted.emit()   # 연료가 막 0이 된 순간
 
 
 ## 연료 잔량에 따른 실효 최고속도
@@ -584,6 +615,30 @@ func apply_bounce_hit() -> void:
 	speed *= BOUNCE_SPEED_MULT
 	_accel_lock = 0.2
 
+# ── 부적 모디파이어 (Doc 28): game_world가 charm_system.get_vehicle_mods()를 주입 ──
+signal part_damaged(amount: float)
+var charm_mods: Dictionary = {}
+var sanity_ratio_ext: float = 1.0        # game_world가 매 프레임 주입 (torn_photo 판정용)
+var _accel_hold_time: float = 0.0        # worn_brake_pad
+var _headwind_timer: float = 0.0         # headwind_amulet: 400km/h 잔여
+var _no_power_timer: float = 0.0         # headwind_amulet: 동력 무효 잔여
+const HEADWIND_SPEED := 400.0
+
+func apply_headwind() -> void:
+	_headwind_timer = 1.0
+	_no_power_timer = 6.0
+
+## headwind 중 조향만 처리 (가속·연료 로직 생략)
+func _update_steering_only(a: bool, d: bool, delta: float, steer_jolt: float) -> void:
+	var lateral_mult := traction_factor * 0.6
+	if a: cam_x = clampf(cam_x - lateral_speed * lateral_mult * delta, -1.0, 1.0)
+	elif d: cam_x = clampf(cam_x + lateral_speed * lateral_mult * delta, -1.0, 1.0)
+	var k := curvature_at_scroll()
+	var auto := clampf(k * AUTO_STEER_GAIN_DEG, -AUTO_STEER_MAX_DEG, AUTO_STEER_MAX_DEG)
+	var target_off := -PLAYER_STEER_MAX_DEG if a else (PLAYER_STEER_MAX_DEG if d else 0.0)
+	_player_steer_offset = move_toward(_player_steer_offset, target_off, STEER_SPEED * delta)
+	steering_angle = move_toward(steering_angle, clampf(auto + _player_steer_offset + steer_jolt, -MAX_STEER_DEG, MAX_STEER_DEG), STEER_SPEED * delta)
+
 # ── 붕괴 상태 패널티 (Doc 04 §정신력 0): game_world가 켜고 끈다 ──
 # 조향 입력 없을 때 우측 15% 쏠림 / 8~12초마다 0.5초 가속 해제 / 최고속 80%
 var collapse_penalty: bool = false
@@ -626,6 +681,11 @@ func repair_worst_tire(amount: float) -> void:
 # contact_type: "front" | "left" | "right" | "side_left" | "side_right" | "all"
 # tire_dmg: 해당 타이어 감소량(%), drivetrain_dmg: 구동계 감소량(%)
 func apply_part_damage(contact_type: String, tire_dmg: float, drivetrain_dmg: float = 0.0) -> void:
+	# heavy_weight 등 충돌 피해 배수
+	var dm := float(charm_mods.get("damage_mult", 1.0))
+	tire_dmg *= dm
+	drivetrain_dmg *= dm
+	var before := dur_lf_tire + dur_rf_tire + dur_lb_tire + dur_rb_tire + dur_drivetrain
 	match contact_type:
 		"front":
 			# 정면 충돌 → LF + RF 동시
@@ -652,6 +712,9 @@ func apply_part_damage(contact_type: String, tire_dmg: float, drivetrain_dmg: fl
 	
 	if drivetrain_dmg > 0.0:
 		dur_drivetrain = maxf(dur_drivetrain - drivetrain_dmg, 0.0)
+	var after := dur_lf_tire + dur_rf_tire + dur_lb_tire + dur_rb_tire + dur_drivetrain
+	if after < before:
+		part_damaged.emit(before - after)   # rusty_razor 등 "내구도 감소가 발생할 때마다" 훅
 
 # ── 구동계 간헐 정지 상태 (GDD §4.2: 30초마다 0.5초간 가속 무효) ──
 var _drivetrain_stall_timer: float = 30.0  # 다음 스탈까지 카운트다운

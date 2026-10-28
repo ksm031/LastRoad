@@ -98,23 +98,25 @@ const PART_DATA := {
 	}
 }
 
-func can_upgrade_part(part_id: String, current_money: int, has_discount: bool = false) -> bool:
+## 레벨 lv → 다음 레벨 비용. cost_mult = 퍽(famous_shop 0.85) × 부적(discarded_receipt) 배수
+func get_upgrade_cost(part_id: String, cost_mult: float = 1.0) -> int:
+	var lv: int = int(upgrades.get(part_id, 0))
+	if lv >= MAX_UPGRADE_LV:
+		return 0
+	return int(float(UPGRADE_COSTS[lv]) * cost_mult)
+
+func can_upgrade_part(part_id: String, current_money: int, cost_mult: float = 1.0) -> bool:
 	var lv = upgrades.get(part_id, 0)
 	if lv >= MAX_UPGRADE_LV: return false
-	var cost = UPGRADE_COSTS[lv]
-	if has_discount:
-		cost = int(float(cost) * 0.85)
-	return current_money >= cost
+	return current_money >= get_upgrade_cost(part_id, cost_mult)
 
-func upgrade_part(part_id: String, current_money: int, has_discount: bool = false) -> Dictionary:
+func upgrade_part(part_id: String, current_money: int, cost_mult: float = 1.0) -> Dictionary:
 	# 성공 시 { "success": true, "cost": int, "new_lv": int } 반환
-	if not can_upgrade_part(part_id, current_money, has_discount):
+	if not can_upgrade_part(part_id, current_money, cost_mult):
 		return {"success": false}
-	
+
 	var lv = upgrades[part_id]
-	var cost = UPGRADE_COSTS[lv]
-	if has_discount:
-		cost = int(float(cost) * 0.85)
+	var cost := get_upgrade_cost(part_id, cost_mult)
 	upgrades[part_id] = lv + 1
 	return {"success": true, "cost": cost, "new_lv": upgrades[part_id]}
 
