@@ -324,6 +324,17 @@ func handle_input(delta: float) -> void:
 	# 구동계 간헐 정지 체크 (GDD §4.2: 30초마다 0.5초 가속 무효)
 	if update_drivetrain_stall(delta):
 		w = false
+
+	# 붕괴 상태: 발이 저절로 떨어진다 (8~12초마다 0.5초 가속 무효)
+	if collapse_penalty:
+		if _collapse_release_left > 0.0:
+			_collapse_release_left -= delta
+			w = false
+		else:
+			_collapse_release_timer -= delta
+			if _collapse_release_timer <= 0.0:
+				_collapse_release_left = 0.5
+				_collapse_release_timer = randf_range(8.0, 12.0)
 		
 	if _adrenaline_timer > 0.0:
 		_adrenaline_timer -= delta
@@ -378,6 +389,9 @@ func handle_input(delta: float) -> void:
 		# GDD §4.2: 최고속도 30km/h 강제 제한, 가속 -75%
 		effective_max   = minf(effective_max, 30.0)
 		effective_accel *= 0.25
+
+	if collapse_penalty:
+		effective_max *= COLLAPSE_MAX_SPEED_MULT   # 심리적 무너짐이 몸에 전달
 		
 	var can_accel := (fuel > 0.0)
 	
@@ -423,6 +437,9 @@ func handle_input(delta: float) -> void:
 		lat_move = -lateral_speed * lateral_mult * delta
 	elif d:
 		lat_move = lateral_speed * lateral_mult * delta
+	elif collapse_penalty:
+		# "그녀가 앉던 자리" 쪽으로 차가 당겨진다
+		lat_move = COLLAPSE_RIGHT_PULL * lateral_speed * lateral_mult * delta
 		
 	cam_x = clampf(cam_x + lat_move + frame_pull, -1.0, 1.0)
 
@@ -566,6 +583,14 @@ func apply_pierce_kill() -> void:
 func apply_bounce_hit() -> void:
 	speed *= BOUNCE_SPEED_MULT
 	_accel_lock = 0.2
+
+# ── 붕괴 상태 패널티 (Doc 04 §정신력 0): game_world가 켜고 끈다 ──
+# 조향 입력 없을 때 우측 15% 쏠림 / 8~12초마다 0.5초 가속 해제 / 최고속 80%
+var collapse_penalty: bool = false
+var _collapse_release_timer: float = 10.0   # 다음 가속 해제까지
+var _collapse_release_left:  float = 0.0    # 현재 가속 해제 잔여
+const COLLAPSE_MAX_SPEED_MULT := 0.8
+const COLLAPSE_RIGHT_PULL     := 0.15
 
 # ── 창 명중 (Doc 08 §명중 시 효과): 0.5초 핸들 흔들림(조작 불가) + 속도 소폭 감소 ──
 var _steer_lock: float = 0.0

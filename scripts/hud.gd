@@ -1143,8 +1143,33 @@ func _is_safe_frequency() -> bool:
 		return false
 	return _radio_step >= int(_safe_zone[0]) and _radio_step <= int(_safe_zone[1])
 
+# ── 붕괴 상태 라디오 잠금 (Doc 04): 죽음의 주파수에서 다이얼이 돌아가지 않는다 ──
+var _radio_locked: bool = false
+
+func set_radio_locked(on: bool) -> void:
+	_radio_locked = on
+
+func is_radio_locked() -> bool:
+	return _radio_locked
+
+## 죽음의 주파수로 강제 전환 (안전 구간 바깥의 가장 가까운 스텝)
+func force_death_frequency() -> void:
+	if _safe_zone.is_empty():
+		return
+	var lo := int(_safe_zone[0])
+	var hi := int(_safe_zone[1])
+	var step := hi + 6
+	if step > RADIO_TOTAL_STEPS - 1:
+		step = lo - 6
+	_radio_step = clampi(step, 0, RADIO_TOTAL_STEPS - 1)
+	_update_radio_display()
+
 func _adjust_radio_step(delta: int) -> void:
 	if delta == 0:
+		return
+	if _radio_locked:
+		# 손이 다이얼에서 미끄러진다 — 작은 금속음만
+		play_sfx("repair", 0.6)
 		return
 	var new_step := clampi(_radio_step + delta, 0, RADIO_TOTAL_STEPS - 1)
 	if new_step == _radio_step:

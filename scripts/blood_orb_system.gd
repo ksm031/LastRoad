@@ -102,6 +102,8 @@ func _orb_at_k(k: int) -> Dictionary:
 func _update_billboards() -> void:
 	if _tex_orb == null or _tex_puddle == null or billboard_mgr == null:
 		return
+	if not collection_enabled:
+		return   # 붕괴 상태: 정신이 무너져 수확할 여유 없음 — 오브가 보이지 않는다
 
 	var virtual_spacing := (SPACING_Z * 3.125) / float(ORBS_PER_GROUP)
 	var kr := BillboardManager.visible_k_range(scroll_z, virtual_spacing, VISIBLE_DZ_MIN, VISIBLE_DZ_MAX, WZ_BASE_OFFSET, 0.0)
@@ -151,8 +153,11 @@ func _update_billboards() -> void:
 		# 마지막 인자로 is_shadowless: true 를 안전하게 투과!
 		billboard_mgr.add_entry(depth, orb_rect, _tex_orb, fade, mat_orb, ORB_COLOR, false, light_h, ground_y, false, 0.0, 0.0, 0.0, true)
 
+# Doc 04 붕괴 상태: 도로 오브 비표시 + 수집 불가
+var collection_enabled: bool = true
+
 func check_collection(vehicle: LastRoadVehicle) -> int:
-	if _tex_orb == null:
+	if _tex_orb == null or not collection_enabled:
 		return 0
 	var gained := 0
 	var group_spacing := SPACING_Z * 3.125

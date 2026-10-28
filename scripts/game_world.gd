@@ -76,6 +76,18 @@ var MONSTER_MAX_DIST   : float = 150.0  # 거리 상한. 이 이상 벌어지지
 var MONSTER_GAIN_K     : float = 0.10   # 속도차(km/h) → 거리 변화 계수 (/초)
 var _monster_distance: float = 100.0  # 현재 괴물 간격 (세계 단위)
 var _sanity_ratio: float = 1.0        # 정신력 (1.0 = 정상, 0.0 = 패닉)
+# ── 붕괴 상태 (Doc 04 §정신력 0) ──
+# 0 도달 = 사망 아님. 2초 암전 → 라디오 죽음의 주파수 강제+잠금 → 조향 쏠림·가속 해제·최고속 80%·BO 차단.
+# 담배로 >10% 넘기면 라디오 잠금 해제 + 7초 창. 창 안에 안전 주파수로 못 돌리면 재잠금. >30% 복귀 시 종료.
+var _collapsed         : bool  = false
+var _collapse_blackout : float = 0.0    # 암전 잔여 시간
+var _collapse_knocks   : int   = 0      # 암전 중 트렁크 노크 재생 횟수
+var _collapse_window   : float = 0.0    # 라디오 잠금 해제 후 탈출 창 잔여
+var _collapse_rect     : ColorRect
+const COLLAPSE_BLACKOUT_DUR := 2.0
+const COLLAPSE_WINDOW_DUR   := 7.0
+const COLLAPSE_UNLOCK_SANITY := 0.10
+const COLLAPSE_EXIT_SANITY   := 0.30
 var _weathered_pebble_timer: float = 0.0
 var _cigarette_recovery_timer: float = 0.0
 var _cigarette_recovery_amount: float = 0.0
@@ -232,6 +244,8 @@ func _ready() -> void:
 	_movers = _MoverScript.new()
 	_movers.billboard_mgr = _billboard_mgr
 	add_child(_movers)
+
+	_build_collapse_overlay()
 
 	_obstacles = _ObstacleScript.new()
 	_obstacles.billboard_mgr = _billboard_mgr
@@ -486,7 +500,10 @@ func _process(delta: float) -> void:
 		return
 
 	# ── playing 상태 ──
-	_vehicle.handle_input(delta)
+	if _collapse_blackout > 0.0:
+		_update_collapse_blackout(delta)   # 암전 중: 조작 불가, 차는 관성으로 감속
+	else:
+		_vehicle.handle_input(delta)
 
 	# 차량 이동 시 폐차 루팅 UI 강제 종료 (내 인벤토리는 유지)
 	if _vehicle.speed > 0.5 and _loot_ui != null and _loot_ui.is_open() and not _loot_ui._is_trunk_only:
@@ -520,6 +537,8 @@ func _process(delta: float) -> void:
 		_hud.show_gameover()
 		_hud.set_mirror_alert(false)
 		_hud.stop_engine_sound()
+		if _collapse_rect != null:
+			_collapse_rect.visible = false
 		if _hallucination: _hallucination.force_stop()
 		return
 	
@@ -574,7 +593,8 @@ func _process(delta: float) -> void:
 		_sanity_ratio += recovery_step
 
 	_sanity_ratio = clampf(_sanity_ratio, 0.0, 1.0)
-	
+	_update_collapse(delta)
+
 	# ── 환각 영상 업데이트 (정신력 0일 때 주기적 재생) ──
 	if _hallucination:
 		_hallucination.update_sanity(_sanity_ratio, delta)
@@ -865,6 +885,8 @@ func _resolve_speed_kill(base_threshold: float, bo_reward: int) -> void:
 		# ── 숨겨진 콤보: 배수 적용 (Doc 31 §3) ──
 		var mult := _register_combo_kill()
 		var bo_gain := int(round(float(bo_reward) * mult))
+		if _collapsed:
+			bo_gain = 0   # Doc 04 붕괴 상태: 적 타격 BO 드롭 없음
 		_blood_orbs.award_bo(bo_gain)
 		_sanity_ratio += 0.06  # 시원한 처치가 정신을 들게 함
 		# ── juice: 히트스톱 + 미세 셰이크 + 붉은 안개 + BO 팝업 + 흡수음(콤보 pitch) ──
@@ -1004,6 +1026,8 @@ func _clear_sanity_effects() -> void:
 		_passenger_hallucination.force_stop()
 	if _hud != null:
 		_hud.reset_sanity_visuals()
+	# 붕괴 상태는 정비 구간에서 정신력 50% 회복과 함께 종료 (암전 오버레이 정리 포함)
+	_exit_collapse()
 
 # ── 다음 스테이지로 진행 (연출 시작) ──────────────────────────────────────
 func _advance_to_next_stage() -> void:
@@ -1271,6 +1295,8 @@ func _on_item_used(item_id: String) -> void:
 		if _meta != null and _meta.has_perk("cigarette_taste"):
 			amount = 0.30
 			_vehicle.apply_cigarette_buff(10.0)
+		if _collapsed:
+			amount *= 0.7   # Doc 04 붕괴 상태: 손이 떨려 제대로 피우지 못함 (-30%)
 		_cigarette_recovery_timer = 4.5
 		_cigarette_recovery_amount = amount
 		_hud.spawn_smoke()
@@ -1302,6 +1328,101 @@ func _update_backdrops(delta: float) -> void:
 	_forest_scroll += forest_delta
 	_apply_bg_scroll()
 
+
+# ── 붕괴 상태 (Doc 04 §정신력 0) ─────────────────────────────
+func _build_collapse_overlay() -> void:
+	var layer := CanvasLayer.new()
+	layer.layer = 19   # 포스트프로세스(15)·상점(15) 위, 메인메뉴(20) 아래
+	add_child(layer)
+	_collapse_rect = ColorRect.new()
+	_collapse_rect.color = Color(0, 0, 0, 0)
+	_collapse_rect.size = Vector2(BillboardManager.SCREEN_W, BillboardManager.SCREEN_H)
+	_collapse_rect.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_collapse_rect.visible = false
+	layer.add_child(_collapse_rect)
+
+func _enter_collapse() -> void:
+	_collapsed = true
+	_collapse_blackout = COLLAPSE_BLACKOUT_DUR
+	_collapse_knocks = 0
+	_collapse_window = 0.0
+	_collapse_rect.visible = true
+	_collapse_rect.color = Color(0, 0, 0, 1)
+	_blood_orbs.collection_enabled = false
+	_vehicle.collapse_penalty = true
+	_hud.reset_focus_states()
+	if _loot_ui != null and _loot_ui.is_open():
+		_loot_ui.close()
+		_active_wreck_seed = -1
+	_reset_combo()
+	print("[SANITY] 붕괴 상태 진입")
+
+func _exit_collapse() -> void:
+	if not _collapsed:
+		return
+	_collapsed = false
+	_collapse_blackout = 0.0
+	_collapse_window = 0.0
+	_collapse_rect.visible = false
+	_blood_orbs.collection_enabled = true
+	_vehicle.collapse_penalty = false
+	_hud.set_radio_locked(false)
+	print("[SANITY] 붕괴 상태 종료")
+
+## 암전 2초: 조작 불가, 트렁크 노크 3회, 끝나면 라디오 강제 전환+잠금
+func _update_collapse_blackout(delta: float) -> void:
+	_collapse_blackout -= delta
+	_vehicle.speed = move_toward(_vehicle.speed, 0.0, 6.0 * delta)
+	var elapsed := COLLAPSE_BLACKOUT_DUR - _collapse_blackout
+	# 노크: 0.5 / 1.0 / 1.6초
+	var knock_times := [0.5, 1.0, 1.6]
+	if _collapse_knocks < knock_times.size() and elapsed >= float(knock_times[_collapse_knocks]):
+		_collapse_knocks += 1
+		_hud.play_sfx("impact", 0.45)
+		_trigger_cam_shake(2.0, 0.08)
+	if _collapse_blackout <= 0.0:
+		_collapse_blackout = 0.0
+		_collapse_rect.visible = false
+		_hud.force_death_frequency()
+		_hud.set_radio_locked(true)
+		_hud.show_subtitle("…라디오가… 안 돌아가.", 2.2)
+	else:
+		# 마지막 0.4초는 서서히 밝아짐
+		_collapse_rect.color.a = clampf(_collapse_blackout / 0.4, 0.0, 1.0)
+
+func _update_collapse(delta: float) -> void:
+	if not _collapsed:
+		if _sanity_ratio <= 0.0:
+			_enter_collapse()
+		return
+	if _collapse_blackout > 0.0:
+		return
+	# ── 완전 종료: >30% ──
+	if _sanity_ratio > COLLAPSE_EXIT_SANITY:
+		_exit_collapse()
+		_hud.show_subtitle("…숨을 쉬자.", 1.8)
+		return
+	var above_unlock := _sanity_ratio > COLLAPSE_UNLOCK_SANITY
+	# >10%: 조향·가속 패널티 해제
+	_vehicle.collapse_penalty = not above_unlock
+	if above_unlock:
+		if _hud.is_radio_locked():
+			# 담배가 들었다 → 7초의 창
+			_hud.set_radio_locked(false)
+			_collapse_window = COLLAPSE_WINDOW_DUR
+			_hud.show_subtitle("…손이 움직여. 주파수를 돌려.", 2.0)
+		elif _collapse_window > 0.0:
+			_collapse_window -= delta
+			if _collapse_window <= 0.0 and _hud.get_radio_on_death():
+				# 창을 놓침 → 재잠금. 죽음의 주파수 -2/초는 계속
+				_hud.set_radio_locked(true)
+				_hud.play_sfx("warning", 0.7)
+	else:
+		# 10% 아래로 다시 떨어짐 → 라디오 재잠금 (안전 주파수였다면 다시 끌려감)
+		if not _hud.is_radio_locked():
+			_hud.force_death_frequency()
+			_hud.set_radio_locked(true)
+			_collapse_window = 0.0
 
 # ── 창 던지기 결과 (Doc 08 §명중 시 효과 / §빗맞춤 시 연출) ──
 func _on_spear_warning(_shown_side: int) -> void:
@@ -1539,6 +1660,7 @@ func _reset_game() -> void:
 	_monster_distance = MONSTER_START_DIST
 	_stages_cleared_this_run = 0
 	_sanity_ratio = 1.0
+	_exit_collapse()
 	_cigarette_recovery_timer = 0.0
 	_cigarette_recovery_amount = 0.0
 	_state_timer = 0.0
